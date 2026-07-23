@@ -33,6 +33,7 @@ const setupAnalytics = require('./analytics')
 const setupCidProfile = require('./cid-profile')
 const setupProvideStrategy = require('./provide-strategy')
 const setupSecondInstance = require('./second-instance')
+const { setupIpcHandlers: setupPrivateNetworkIpc } = require('./private-network')
 const { analyticsKeys } = require('./analytics/keys')
 const handleError = require('./handleError')
 const createSplashScreen = require('./splash/create-splash-screen')
@@ -85,6 +86,7 @@ async function run () {
       setupCidProfile(),
       setupProvideStrategy(),
       setupSecondInstance(),
+      setupPrivateNetworkIpc(),
       // Setup global shortcuts
       setupTakeScreenshot()
     ])

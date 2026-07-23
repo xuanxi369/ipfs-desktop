@@ -467,9 +467,7 @@ function checkRepositoryAndConfiguration (ipfsd) {
 
     const swarmKeyPath = join(ipfsd.path, 'swarm.key')
     if (fs.pathExistsSync(swarmKeyPath)) {
-      // IPFS Desktop does not support private network IPFS repositories.
-      dialogs.repositoryIsPrivateDialog(ipfsd.path)
-      return false
+      logger.info(`[daemon] private network swarm.key detected at ${swarmKeyPath}`)
     }
 
     return true
@@ -481,6 +479,67 @@ function checkRepositoryAndConfiguration (ipfsd) {
   }
 }
 
+
+/**
+ * Generate a swarm.key file for private IPFS network.
+ * The key format is a 32-byte hex-encoded pre-shared key.
+ *
+ * @param {string} repoPath - path to the IPFS repository
+ * @returns {{ keyPath: string, keyContent: string }} the swarm key info
+ */
+function generateSwarmKey (repoPath) {
+  const crypto = require('crypto')
+  const keyContent = crypto.randomBytes(32).toString('hex')
+  const keyPath = join(repoPath, 'swarm.key')
+  const swarmKeyData = `/key/swarm/psk/1.0.0/\n/base16/\n${keyContent}\n`
+  fs.writeFileSync(keyPath, swarmKeyData)
+  logger.info(`[daemon] generated swarm.key at ${keyPath}`)
+  return { keyPath, keyContent }
+}
+
+/**
+ * Import an existing swarm.key into the repository.
+ *
+ * @param {string} repoPath - path to the IPFS repository
+ * @param {string} keyContent - the raw 32-byte hex key (not the full swarm.key file content)
+ * @returns {{ keyPath: string, keyContent: string }}
+ */
+function importSwarmKey (repoPath, keyContent) {
+  const keyPath = join(repoPath, 'swarm.key')
+  const swarmKeyData = `/key/swarm/psk/1.0.0/\n/base16/\n${keyContent}\n`
+  fs.writeFileSync(keyPath, swarmKeyData)
+  logger.info(`[daemon] imported swarm.key to ${keyPath}`)
+  return { keyPath, keyContent }
+}
+
+/**
+ * Validate that a string looks like a valid swarm key (32 hex bytes).
+ *
+ * @param {string} keyContent
+ * @returns {boolean}
+ */
+function validateSwarmKey (keyContent) {
+  return /^[0-9a-fA-F]{64}$/.test(keyContent)
+}
+
+/**
+ * Read an existing swarm key from a repository.
+ *
+ * @param {string} repoPath
+ * @returns {{ keyContent: string } | null}
+ */
+function readSwarmKey (repoPath) {
+  const keyPath = join(repoPath, 'swarm.key')
+  if (!fs.pathExistsSync(keyPath)) return null
+  const content = fs.readFileSync(keyPath, 'utf-8')
+  // Parse the standard swarm.key format: /key/swarm/psk/1.0.0/\n/base16/\n<hex>
+  const lines = content.trim().split('\n')
+  if (lines.length >= 3 && lines[0].includes('psk') && lines[2].length === 64) {
+    return { keyContent: lines[2] }
+  }
+  return null
+}
+
 module.exports = Object.freeze({
   configExists,
   apiFileExists,
@@ -488,5 +547,9 @@ module.exports = Object.freeze({
   applyDefaults,
   migrateConfig,
   checkPorts,
-  checkRepositoryAndConfiguration
+  checkRepositoryAndConfiguration,
+  generateSwarmKey,
+  importSwarmKey,
+  validateSwarmKey,
+  readSwarmKey
 })

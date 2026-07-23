@@ -246,5 +246,25 @@
   "invalidRepositoryDialog": {
     "title": "Invalid IPFS Repository or Configuration File",
     "message": "The repository at “{ path }” or its configuration is invalid. The “config” file must be a valid JSON.\n\nBefore starting IPFS Desktop again, please fix the configuration file or rename the old repository to “.ipfs.backup”. Please note that by renaming the old repository, IPFS Desktop will generate a new repository"
+  },
+  "privateNetwork": {
+    "title": "Private Network",
+    "generateSwarmKey": "Generate Swarm Key",
+    "importSwarmKey": "Import Swarm Key…",
+    "openSwarmKeyLocation": "Show Swarm Key in Folder",
+    "removeSwarmKey": "Remove Swarm Key",
+    "viewPeers": "View Private Network Peers"
+  },
+  "privateNetwork.swarmKeyGenerated": {
+    "title": "Swarm Key Generated",
+    "message": "A new swarm key has been generated for your private IPFS network. Share this key with other nodes that should join your private network."
+  },
+  "privateNetwork.importSwarmKeyPrompt": {
+    "title": "Import Swarm Key",
+    "message": "Paste the swarm key content (64 hex characters) to join an existing private network."
+  },
+  "privateNetwork.removeSwarmKeyConfirm": {
+    "title": "Remove Swarm Key",
+    "message": "Removing the swarm key will disconnect this node from the private network. The node will rejoin the public IPFS network after restart. Are you sure?"
   }
 }
