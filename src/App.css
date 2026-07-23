@@ -1,0 +1,116 @@
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+h1 {
+  text-align: center;
+  color: #333;
+  margin-bottom: 30px;
+}
+
+h2 {
+  color: #555;
+  font-size: 1.2em;
+  margin-bottom: 15px;
+}
+
+.status-card,
+.config-card {
+  background: #f5f5f5;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.status-indicator {
+  display: inline-block;
+  padding: 10px 20px;
+  border-radius: 20px;
+  color: white;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 0.9em;
+  margin-bottom: 10px;
+}
+
+.status-details {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #ddd;
+}
+
+.status-details p {
+  margin: 8px 0;
+  font-size: 0.95em;
+  color: #666;
+}
+
+.controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+button {
+  flex: 1;
+  min-width: 140px;
+  padding: 12px 20px;
+  border: none;
+  border-radius: 6px;
+  background: #2196f3;
+  color: white;
+  font-size: 0.95em;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.3s, opacity 0.3s;
+}
+
+button:hover:not(:disabled) {
+  background: #1976d2;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.config-item {
+  margin: 10px 0;
+  padding: 8px;
+  background: white;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.config-item strong {
+  color: #333;
+  margin-right: 8px;
+}
+
+.error-message,
+.error {
+  background: #ffebee;
+  color: #c62828;
+  padding: 12px;
+  border-radius: 6px;
+  margin: 10px 0;
+  border-left: 4px solid #c62828;
+}
+
+footer {
+  text-align: center;
+  color: #999;
+  font-size: 0.85em;
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid #eee;
+}
+
+footer p {
+  margin: 5px 0;
+}
