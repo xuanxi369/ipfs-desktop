@@ -421,11 +421,6 @@ impl ProxyClient {
     {
         self.call_api(f).await
     }
-
-    /// 更新 API 地址（配置变更时）
-    pub fn update_api_addr(&mut self, addr: String) {
-        self.api = Some(IpfsApiClient::new(addr));
-    }
 }
 
 #[cfg(test)]

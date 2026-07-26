@@ -479,32 +479,6 @@ impl IpfsApiClient {
         Ok(result)
     }
 
-    /// 列出目录中的文件（只读，GET）
-    pub async fn ls(&self, cid: &str) -> Result<serde_json::Value, DaemonError> {
-        let url = self.api_url(&format!("ls?arg={}", encode(cid)));
-        tracing::debug!("Listing: {}", url);
-
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
-
-        if !response.status().is_success() {
-            return Err(DaemonError::ApiError(format!(
-                "API returned error status: {}",
-                response.status()
-            )));
-        }
-
-        let value = response.json().await
-            .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
-        Ok(value)
-    }
-
     /// 从 IPFS 读取文件内容（cat — 流式返回原始字节）
     ///
     /// 返回文件的完整内容。对于大文件应使用 `cat_to_file` 真流式下载到磁盘。
@@ -601,58 +575,6 @@ impl IpfsApiClient {
 
         tracing::info!("Cat stream completed: {} bytes -> {:?}", written, output_path);
         Ok(written)
-    }
-
-    /// 下载 IPFS 文件到本地路径
-    ///
-    /// 使用 ipfs get 将文件/dir 保存到本地。
-    /// 注意：IPFS HTTP API 的 /get 返回 tar 流，这里直接保存到指定路径。
-    pub async fn get(&self, cid: &str, output_path: &std::path::Path) -> Result<(), DaemonError> {
-        let url = self.api_url(&format!("get?arg={}&archive=true", encode(cid)));
-        tracing::info!("Get file: {} -> {:?}", cid, output_path);
-
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(DaemonError::ApiError(format!(
-                "get failed ({}): {}",
-                status, body
-            )));
-        }
-
-        // 确保父目录存在，再流式把 tar 响应写入文件（不整份驻留内存）
-        if let Some(parent) = output_path.parent() {
-            tokio::fs::create_dir_all(parent).await
-                .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
-        }
-
-        use futures_util::StreamExt;
-        use tokio::io::AsyncWriteExt;
-        let mut file = tokio::fs::File::create(output_path).await
-            .map_err(|e| DaemonError::IoError(format!("Failed to create output file: {}", e)))?;
-        let mut written: u64 = 0;
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk
-                .map_err(|e| DaemonError::ApiParseError(format!("Failed to read get response: {}", e)))?;
-            file.write_all(&chunk).await
-                .map_err(|e| DaemonError::IoError(format!("Failed to write output file: {}", e)))?;
-            written += chunk.len() as u64;
-        }
-        file.flush().await
-            .map_err(|e| DaemonError::IoError(format!("Failed to flush output file: {}", e)))?;
-
-        tracing::info!("Get completed: {} bytes -> {:?}", written, output_path);
-        Ok(())
     }
 
     /// 获取文件大小（通过 stat 端点）
