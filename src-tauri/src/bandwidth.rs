@@ -201,8 +201,8 @@ pub struct BandwidthMonitor {
     /// 上传速率历史（B/s）
     rate_out_history: Vec<f64>,
     /// 上次采样时的累计值
-    last_total_in: u64,
-    last_total_out: u64,
+    pub last_total_in: u64,
+    pub last_total_out: u64,
     last_sample_time: Option<std::time::Instant>,
     /// 最大历史点数
     max_history: usize,

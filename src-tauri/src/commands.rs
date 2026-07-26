@@ -394,7 +394,7 @@ pub async fn set_auto_launch(
     let auto = auto_launch::AutoLaunchBuilder::new()
         .set_app_name(app_name)
         .set_app_path(&app_path.to_string_lossy())
-        .set_use_launch_agent(true)
+        .set_macos_launch_mode(auto_launch::MacosLaunchMode::Agent)
         .build()
         .map_err(|e| DaemonError::ConfigError(format!("Failed to build auto-launch: {}", e)))?;
 
@@ -1091,33 +1091,6 @@ pub async fn get_backend_capabilities(
     Ok(serde_json::to_value(caps).unwrap_or_default())
 }
 
-// Phase 4 测试模块暂时禁用（compat_test/benchmark 编译未就绪）
-#[cfg(not(any()))]
-/// 运行兼容性测试
-#[tauri::command]
-pub async fn run_compat_test(
-    state: State<'_, AppState>,
-) -> Result<crate::compat_test::CompatSuiteResult, DaemonError> {
-    use crate::compat_test::CompatTester;
-
-    let mut tester = CompatTester::new(
-        state.kubo_backend.as_ref().clone(),
-        state.iroh_backend.as_ref().clone(),
-    );
-    Ok(tester.run_all().await)
-}
-
-#[cfg(not(any()))]
-/// 运行性能基准测试
-#[tauri::command]
-pub async fn run_benchmark(
-    state: State<'_, AppState>,
-) -> Result<crate::benchmark::BenchSuiteResult, DaemonError> {
-    use crate::benchmark::MicroBenchmark;
-
-    let mut bench = MicroBenchmark::new(
-        state.kubo_backend.as_ref().clone(),
-        state.iroh_backend.as_ref().clone(),
     );
     Ok(bench.run_all().await)
 }

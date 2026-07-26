@@ -140,7 +140,7 @@ impl OfflineQueue {
         }).optional()
           .map_err(|e| e.to_string())?;
 
-        Ok(result.map_err(|e| e.to_string())?)
+        Ok(result)
     }
 
     /// 标记条目为已完成（从队列移除）

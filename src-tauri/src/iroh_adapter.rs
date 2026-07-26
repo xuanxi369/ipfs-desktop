@@ -137,7 +137,7 @@ impl Backend for IrohBackend {
         ))
     }
 
-    async fn add_file(&self, path: &Path) -> Result<AddOutput, BackendError> {
+    async fn add_file(&self, _path: &Path) -> Result<AddOutput, BackendError> {
         // Stub: 真实实现使用 iroh-blobs
         //
         // ```ignore

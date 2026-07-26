@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use crate::daemon::IpfsApiClient;
 use crate::backend_trait::{
-    Backend, BackendType, BackendCapabilities, BackendError, BackendErrorKind,
+    Backend, BackendType, BackendCapabilities, BackendError,
     NodeInfo, RepoInfo, PeerInfo as BPeerInfo,
     AddOutput, PinEntry as BPinEntry,
     BandwidthInfo, BitswapInfo, IpnsOutput, IpnsPath,

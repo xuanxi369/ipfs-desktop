@@ -384,7 +384,7 @@ impl IpfsApiClient {
                 } else {
                     Err(DaemonError::ApiConnectionFailed {
                         addr: self.api_addr.clone(),
-                        source: err_str,
+                        detail: err_str,
                     })
                 }
             }
