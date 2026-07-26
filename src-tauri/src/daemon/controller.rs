@@ -81,7 +81,7 @@ impl DaemonController {
             let msg = "Daemon process exited unexpectedly (check logs for stderr output)".to_string();
             tracing::error!("Daemon startup failed: {}", msg);
             *proc_guard = None;
-            return Err(DaemonError::ProcessStartFailed(msg));
+            Err(DaemonError::ProcessStartFailed(msg))
         }
     }
 
@@ -231,7 +231,7 @@ impl DaemonController {
     /// 获取进程 ID
     pub async fn get_pid(&self) -> Option<u32> {
         let process_guard = self.process.lock().await;
-        process_guard.as_ref().and_then(|child| Some(child.id()))
+        process_guard.as_ref().map(|child| child.id())
     }
 }
 

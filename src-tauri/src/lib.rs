@@ -14,9 +14,8 @@ pub mod bandwidth;
 pub mod backend_trait;
 pub mod kubo_adapter;
 pub mod iroh_adapter;
-// Phase 4 测试模块暂时禁用（编译错误待修复）
-// pub mod compat_test;
-// pub mod benchmark;
+pub mod compat_test;
+pub mod benchmark;
 
 use config::AppConfig;
 use state::AppState;
@@ -115,15 +114,15 @@ pub fn run() {
             commands::get_active_backend,
             commands::switch_backend,
             commands::get_backend_capabilities,
-            // commands::run_compat_test,   // Phase 4 测试模块暂时禁用
-            // commands::run_benchmark,     // Phase 4 测试模块暂时禁用
+            commands::run_compat_test,
+            commands::run_benchmark,
         ])
         .setup(|app| {
             tracing::info!("Tauri setup complete");
             tracing::info!("App version: {}", app.package_info().version);
             
             // 初始化系统托盘（manage 保持 TrayIcon 存活，防止被 Drop 移除）
-            let tray = tray::setup_tray(&app.handle())?;
+            let tray = tray::setup_tray(app.handle())?;
             app.handle().manage(tray);
             
             Ok(())

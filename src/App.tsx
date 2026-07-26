@@ -459,7 +459,7 @@ function App() {
 
       {/* ── Tab 导航 ── */}
       <nav className="tab-nav">
-        {(["dashboard", "webui", "files", "pins"] as TabName[]).map((tab) => (
+        {(["dashboard", "webui", "files", "pins", "ipns"] as TabName[]).map((tab) => (
           <button
             key={tab}
             className={`tab-btn ${activeTab === tab ? "active" : ""}`}
@@ -644,7 +644,8 @@ function App() {
               catch (e) { setError(formatError(e)); }
             }}>
               <option value="kubo">Kubo (Go)</option>
-              <option value="iroh">Iroh (Rust) — Experimental</option>
+              {/* Iroh 后端目前仅为 stub（未实现文件/Pin/IPNS 等操作），暂不开放切换 */}
+              <option value="iroh" disabled>Iroh (Rust) — 开发中 / not yet functional</option>
             </select>
             <button onClick={async () => {
               try {

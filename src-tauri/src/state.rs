@@ -134,6 +134,9 @@ impl AppState {
     pub async fn update_config(&self, new_config: AppConfig) {
         let new_client = IpfsApiClient::new(new_config.api_addr.clone());
         *self.api_client.write().await = Some(new_client);
+        // 同步重建代理客户端，使其指向新的 API 地址（共享同一份缓存）
+        let new_proxy = ProxyClient::new(new_config.api_addr.clone(), self.cache.clone());
+        *self.proxy_client.write().await = Some(new_proxy);
         *self.config.write().await = new_config;
     }
 

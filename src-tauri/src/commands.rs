@@ -270,11 +270,11 @@ pub async fn update_config(
 ) -> Result<(), DaemonError> {
     // 验证配置
     new_config.validate()
-        .map_err(|e| DaemonError::ConfigError(e))?;
+        .map_err(DaemonError::ConfigError)?;
 
     // 保存配置到磁盘
     new_config.save()
-        .map_err(|e| DaemonError::ConfigError(e))?;
+        .map_err(DaemonError::ConfigError)?;
 
     // 更新状态
     state.update_config(new_config.clone()).await;
@@ -291,6 +291,14 @@ pub async fn get_node_id(
 ) -> Result<String, DaemonError> {
     tracing::info!("Getting node ID...");
 
+    // 优先走智能代理（缓存 + 熔断 + 统计）
+    if let Some(proxy) = state.get_proxy_client().await {
+        if let Ok(node) = proxy.get_node_id().await {
+            return Ok(node.id);
+        }
+    }
+
+    // 代理不可用时回退到原始 API 客户端
     if let Some(api_client) = state.get_api_client().await {
         match api_client.id().await {
             Ok(node_id) => {
@@ -412,7 +420,7 @@ pub async fn set_auto_launch(
     let mut config = state.get_config().await;
     config.auto_launch = enable;
     config.save()
-        .map_err(|e| DaemonError::ConfigError(e))?;
+        .map_err(DaemonError::ConfigError)?;
     state.update_config(config).await;
 
     Ok(())
@@ -524,6 +532,13 @@ pub async fn get_pin_list(
 ) -> Result<PinList, DaemonError> {
     tracing::info!("get_pin_list");
 
+    // 优先走智能代理（缓存 + 熔断 + 统计）
+    if let Some(proxy) = state.get_proxy_client().await {
+        if let Ok(pins) = proxy.get_pin_list().await {
+            return Ok(pins);
+        }
+    }
+
     let client = state.get_api_client().await
         .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
 
@@ -541,7 +556,10 @@ pub async fn add_pin(
     let client = state.get_api_client().await
         .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
 
-    client.pin_add(&cid).await
+    let result = client.pin_add(&cid).await?;
+    // 写操作后让 pin 缓存失效，保证下次读取拿到最新列表
+    state.cache.invalidate("pins");
+    Ok(result)
 }
 
 /// 移除 Pin
@@ -555,7 +573,10 @@ pub async fn remove_pin(
     let client = state.get_api_client().await
         .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
 
-    client.pin_rm(&cid).await
+    let result = client.pin_rm(&cid).await?;
+    // 写操作后让 pin 缓存失效，保证下次读取拿到最新列表
+    state.cache.invalidate("pins");
+    Ok(result)
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -701,7 +722,7 @@ pub async fn generate_key(
 
     // 本地生成密钥对
     let keypair = state.key_manager.generate_key(&label)
-        .map_err(|e| DaemonError::ConfigError(e))?;
+        .map_err(DaemonError::ConfigError)?;
 
     // 同时在 Kubo 中注册该密钥
     if let Some(client) = state.get_api_client().await {
@@ -721,7 +742,7 @@ pub async fn list_keys(
     state: State<'_, AppState>,
 ) -> Result<Vec<crate::keyring::KeyPair>, DaemonError> {
     state.key_manager.list_keys()
-        .map_err(|e| DaemonError::ConfigError(e))
+        .map_err(DaemonError::ConfigError)
 }
 
 /// 删除密钥
@@ -731,7 +752,7 @@ pub async fn delete_key(
     label: String,
 ) -> Result<(), DaemonError> {
     state.key_manager.delete_key(&label)
-        .map_err(|e| DaemonError::ConfigError(e))
+        .map_err(DaemonError::ConfigError)
 }
 
 /// IPNS 发布：将 CID 绑定到密钥名称
@@ -772,24 +793,15 @@ pub async fn ipns_resolve(
 pub async fn get_cached_dashboard(
     state: State<'_, AppState>,
 ) -> Result<DashboardStats, DaemonError> {
-    // 尝试从缓存组装
-    let cached_peers = state.cache.get_peers();
-    let cached_bw = state.cache.get_bandwidth();
-    let cached_bs = state.cache.get_bitswap();
-    let cached_repo = state.cache.get_repo_stats();
-    let cached_node = state.cache.get_node_info();
-
-    let client = state.get_api_client().await;
-
-    // 如果所有缓存都命中，直接返回
-    if cached_peers.is_some() && cached_bw.is_some()
-        && cached_bs.is_some() && cached_repo.is_some() && cached_node.is_some()
-    {
-        let peers: Option<SwarmPeers> = cached_peers.and_then(|s| serde_json::from_str(&s).ok());
-        let bandwidth: Option<BandwidthStats> = cached_bw.and_then(|s| serde_json::from_str(&s).ok());
-        let bitswap: Option<BitswapStats> = cached_bs.and_then(|s| serde_json::from_str(&s).ok());
-        let repo: Option<RepoStats> = cached_repo.and_then(|s| serde_json::from_str(&s).ok());
-        let node_id: Option<NodeId> = cached_node.and_then(|s| serde_json::from_str(&s).ok());
+    // 通过智能代理组装：每个字段都先查缓存，未命中才穿透 API 并回填，
+    // 同时统一记录缓存命中率 / 延迟 / 熔断等指标（供代理统计面板展示）。
+    if let Some(proxy) = state.get_proxy_client().await {
+        let node_id = proxy.get_node_id().await.ok();
+        let repo = proxy.get_repo_stats().await.ok();
+        let peers = proxy.get_swarm_peers().await.ok();
+        let bandwidth = proxy.get_bandwidth().await.ok();
+        let bitswap = proxy.get_bitswap().await.ok();
+        let pin_count = proxy.get_pin_list().await.map(|p| p.pins.len()).unwrap_or(0);
 
         return Ok(DashboardStats {
             node_id,
@@ -798,12 +810,12 @@ pub async fn get_cached_dashboard(
             peers,
             bandwidth,
             bitswap,
-            pin_count: 0,
+            pin_count,
         });
     }
 
-    // 缓存未命中，回退到 API 查询
-    drop(cached_peers); // 释放借用
+    // 代理不可用时回退到直接 API 查询
+    let client = state.get_api_client().await;
     get_dashboard_stats_inner(state, client).await
 }
 
@@ -920,9 +932,9 @@ pub async fn get_offline_queue(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, DaemonError> {
     let entries = state.offline_queue.list_all()
-        .map_err(|e| DaemonError::ConfigError(e))?;
+        .map_err(DaemonError::ConfigError)?;
     let count = state.offline_queue.len()
-        .map_err(|e| DaemonError::ConfigError(e))?;
+        .map_err(DaemonError::ConfigError)?;
 
     Ok(serde_json::json!({
         "count": count,
@@ -973,7 +985,7 @@ pub async fn set_bandwidth_config(
     // 如果有 Kubo 配置管理器，应用到磁盘
     if let Some(kc) = state.kubo_config.read().await.as_ref() {
         kc.apply_bandwidth_config(&config)
-            .map_err(|e| DaemonError::ConfigError(e))?;
+            .map_err(DaemonError::ConfigError)?;
     }
 
     tracing::info!("Bandwidth config updated: {} conns / {} streams",
@@ -1015,7 +1027,7 @@ pub async fn add_file_safe(
                 .as_secs(),
         };
         let id = state.offline_queue.enqueue(op)
-            .map_err(|e| DaemonError::ConfigError(e))?;
+            .map_err(DaemonError::ConfigError)?;
         tracing::info!("Daemon not running, queued file add as id={}", id);
         return Ok(serde_json::json!({
             "queued": true, "queue_id": id, "file_path": file_path
@@ -1090,3 +1102,38 @@ pub async fn get_backend_capabilities(
     };
     Ok(serde_json::to_value(caps).unwrap_or_default())
 }
+
+// ════════════════════════════════════════════════════════════════
+// Phase 4: 性能基准测试 & 协议兼容性测试
+// ════════════════════════════════════════════════════════════════
+
+/// 运行 Kubo vs Iroh 微基准测试
+///
+/// 对 node_info / repo_stat / swarm_peers 三个操作各测量若干次延迟，
+/// 返回统计结果。后端不可用时该操作会记录为失败（不会导致命令报错）。
+#[tauri::command]
+pub async fn run_benchmark(
+    state: State<'_, AppState>,
+) -> Result<crate::benchmark::BenchSuiteResult, DaemonError> {
+    tracing::info!("run_benchmark");
+    let kubo = state.kubo_backend.as_ref().clone();
+    let iroh = state.iroh_backend.as_ref().clone();
+    let bench = crate::benchmark::MicroBenchmark::new(kubo, iroh);
+    Ok(bench.run_all().await)
+}
+
+/// 运行 Kubo ↔ Iroh 协议兼容性测试
+///
+/// 校验版本信息、可用性、仓库初始化、节点发现等维度，返回兼容性评分。
+#[tauri::command]
+pub async fn run_compat_test(
+    state: State<'_, AppState>,
+) -> Result<crate::compat_test::CompatSuiteResult, DaemonError> {
+    tracing::info!("run_compat_test");
+    let kubo = state.kubo_backend.as_ref().clone();
+    let iroh = state.iroh_backend.as_ref().clone();
+    let mut tester = crate::compat_test::CompatTester::new(kubo, iroh);
+    Ok(tester.run_all().await)
+}
+
+

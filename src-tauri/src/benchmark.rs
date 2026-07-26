@@ -133,7 +133,7 @@ impl MicroBenchmark {
 
         let total_time = sum;
         let throughput = if total_time > 0.0 {
-            (self.iterations as f64 / (total_time / 1000.0))
+            self.iterations as f64 / (total_time / 1000.0)
         } else {
             0.0
         };
@@ -153,7 +153,7 @@ impl MicroBenchmark {
 
     /// 对两个后端执行同一个操作
     async fn bench_both<Fk, Fi, FutK, FutI>(
-        &mut self,
+        &self,
         name: &str,
         f_kubo: Fk,
         f_iroh: Fi,
@@ -172,7 +172,7 @@ impl MicroBenchmark {
     // ── 具体基准测试 ──
 
     /// 基准: node_info 延迟
-    pub async fn bench_node_info(&mut self) -> Vec<BenchOpResult> {
+    pub async fn bench_node_info(&self) -> Vec<BenchOpResult> {
         let kubo = &self.kubo;
         let iroh = &self.iroh;
         self.bench_both(
@@ -183,7 +183,7 @@ impl MicroBenchmark {
     }
 
     /// 基准: repo_stat 延迟
-    pub async fn bench_repo_stat(&mut self) -> Vec<BenchOpResult> {
+    pub async fn bench_repo_stat(&self) -> Vec<BenchOpResult> {
         let kubo = &self.kubo;
         let iroh = &self.iroh;
         self.bench_both(
@@ -194,7 +194,7 @@ impl MicroBenchmark {
     }
 
     /// 基准: swarm_peers 延迟
-    pub async fn bench_swarm_peers(&mut self) -> Vec<BenchOpResult> {
+    pub async fn bench_swarm_peers(&self) -> Vec<BenchOpResult> {
         let kubo = &self.kubo;
         let iroh = &self.iroh;
         self.bench_both(
@@ -205,7 +205,7 @@ impl MicroBenchmark {
     }
 
     /// 运行全部基准测试
-    pub async fn run_all(&mut self) -> BenchSuiteResult {
+    pub async fn run_all(&self) -> BenchSuiteResult {
         let started = Instant::now();
         let mut all_results = Vec::new();
 
@@ -318,7 +318,7 @@ mod tests {
         let kubo = KuboBackend::new("http://127.0.0.1:5001".to_string());
         let dir = std::env::temp_dir().join("bench-iroh");
         let iroh = IrohBackend::new(dir);
-        let mut bench = MicroBenchmark::new(kubo, iroh);
+        let bench = MicroBenchmark::new(kubo, iroh);
         let result = bench.run_all().await;
         assert!(!result.operations.is_empty());
         println!("Benchmark complete: {} ops, winner: {:?}",

@@ -14,7 +14,7 @@
 //! cargo test --test compat_test -- --ignored
 //! ```
 
-use crate::backend_trait::{Backend, BackendType};
+use crate::backend_trait::Backend;
 use crate::kubo_adapter::KuboBackend;
 use crate::iroh_adapter::IrohBackend;
 use serde::{Deserialize, Serialize};
@@ -90,7 +90,9 @@ impl CompatTester {
         requires_both: bool,
         f: F,
     ) where
-        F: FnOnce(&KuboBackend, &IrohBackend) -> Fut,
+        // 传入后端的克隆（owned）而非引用，避免闭包返回借用 future 引发的
+        // 高阶生命周期问题；KuboBackend/IrohBackend 均为轻量 Clone。
+        F: FnOnce(KuboBackend, IrohBackend) -> Fut,
         Fut: std::future::Future<Output = Result<(String, String), String>>,
     {
         let started = Instant::now();
@@ -112,7 +114,7 @@ impl CompatTester {
             return;
         }
 
-        match f(&self.kubo, &self.iroh).await {
+        match f(self.kubo.clone(), self.iroh.clone()).await {
             Ok((kubo_val, iroh_val)) => {
                 let passed = kubo_val == iroh_val;
                 self.results.push(CompatTestResult {
@@ -266,7 +268,9 @@ impl ContentIntegrityTester {
 
         let _ = std::fs::remove_file(&tmp);
 
-        (kubo_result.cid, iroh_result, iroh_result.as_ref().map_or(false, |s| !s.starts_with("Error")))
+        // 先计算成功标志，避免在同一元组里对 iroh_result 移动后再借用
+        let success = iroh_result.as_ref().is_some_and(|s| !s.starts_with("Error"));
+        (kubo_result.cid, iroh_result, success)
     }
 }
 

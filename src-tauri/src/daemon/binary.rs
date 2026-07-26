@@ -83,16 +83,16 @@ impl BinaryFinder {
             app_dir.join("resources").join(binary_name),
         ];
 
-        for candidate in candidates {
-            if candidate.exists() && Self::verify_binary(&candidate) {
-                return Some(candidate);
-            }
-        }
-
-        None
+        candidates
+            .into_iter()
+            .find(|candidate| candidate.exists() && Self::verify_binary(candidate))
     }
 
     /// 验证二进制文件是否是有效的 IPFS 可执行文件
+    ///
+    /// 注意：这里只做“行为验证”（能否正常输出 Kubo 版本字符串），
+    /// **不做加密签名 / 哈希校验**。若需要防止二进制被篡改，应在此基础上
+    /// 增加对已知发行版哈希（或 Kubo 官方 GPG 签名）的比对。
     fn verify_binary(path: &PathBuf) -> bool {
         #[cfg(unix)]
         {
@@ -109,7 +109,10 @@ impl BinaryFinder {
         match Command::new(path).arg("version").output() {
             Ok(output) => {
                 let version_str = String::from_utf8_lossy(&output.stdout);
-                let is_valid = output.status.success() && version_str.contains("ipfs");
+                // 收紧匹配：Kubo 的 `ipfs version` 输出形如 "ipfs version 0.x.y"，
+                // 仅含 "ipfs" 子串（如路径里带 ipfs 的其它程序）不足以判定。
+                let is_valid = output.status.success()
+                    && version_str.to_lowercase().contains("ipfs version");
 
                 if is_valid {
                     tracing::info!("Verified IPFS binary: {}", version_str.trim());

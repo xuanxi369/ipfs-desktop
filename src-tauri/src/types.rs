@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 /// IPFS 守护进程状态
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data")]
+#[derive(Default)]
 pub enum DaemonStatus {
+    #[default]
     Stopped,
     Starting,
     Running { 
@@ -17,11 +19,6 @@ pub enum DaemonStatus {
     },
 }
 
-impl Default for DaemonStatus {
-    fn default() -> Self {
-        DaemonStatus::Stopped
-    }
-}
 
 /// IPFS API 响应 - 版本信息
 #[derive(Debug, Deserialize, Serialize)]

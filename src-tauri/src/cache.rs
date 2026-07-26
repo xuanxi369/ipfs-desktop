@@ -87,6 +87,13 @@ impl CacheStore {
         }
     }
 
+    /// 使指定缓存键立即失效（写操作后调用，强制下次读取穿透到 API）
+    pub fn invalidate(&self, key: &str) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute("DELETE FROM cache WHERE key = ?1", params![key]);
+        }
+    }
+
     /// 清除过期条目
     pub fn prune(&self) {
         if let Ok(conn) = self.conn.lock() {
@@ -168,7 +175,12 @@ mod tests {
     use super::*;
 
     fn temp_db() -> CacheStore {
-        let path = std::env::temp_dir().join("ipfs-cache-test.db");
+        // 每个测试用独立文件，避免并行执行时共享同一 DB 互相干扰
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir()
+            .join(format!("ipfs-cache-test-{}-{}.db", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         CacheStore::new(path).unwrap()
     }

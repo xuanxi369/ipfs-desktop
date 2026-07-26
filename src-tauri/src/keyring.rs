@@ -34,6 +34,12 @@ pub struct KeyManager {
     keychain_service: String,
 }
 
+impl Default for KeyManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyManager {
     /// 创建密钥管理器
     pub fn new() -> Self {
@@ -56,7 +62,7 @@ impl KeyManager {
     pub fn generate_key(&self, label: &str) -> Result<KeyPair, String> {
         let mut secret_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut secret_bytes);
-        let signing_key = SigningKey::from_bytes(&secret_bytes.into());
+        let signing_key = SigningKey::from_bytes(&secret_bytes);
         let verifying_key = signing_key.verifying_key();
 
         let secret_bytes = signing_key.to_bytes();
@@ -66,8 +72,8 @@ impl KeyManager {
         let ipns_name = self.public_key_to_ipns_name(&public_bytes);
 
         let keypair = KeyPair {
-            secret_key: STANDARD.encode(&secret_bytes),
-            public_key: STANDARD.encode(&public_bytes),
+            secret_key: STANDARD.encode(secret_bytes),
+            public_key: STANDARD.encode(public_bytes),
             ipns_name,
             label: label.to_string(),
         };
@@ -124,7 +130,7 @@ impl KeyManager {
 
                 let kp = KeyPair {
                     secret_key: secret,
-                    public_key: STANDARD.encode(&public_bytes),
+                    public_key: STANDARD.encode(public_bytes),
                     ipns_name,
                     label: label.to_string(),
                 };
@@ -144,7 +150,7 @@ impl KeyManager {
         if let Ok(entries) = std::fs::read_dir(&self.keys_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |e| e == "json") {
+                if path.extension().is_some_and(|e| e == "json") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(kp) = serde_json::from_str::<KeyPair>(&content) {
                             keys.push(kp);

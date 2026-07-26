@@ -2,23 +2,22 @@
 //!
 //! 在 GUI 和 Kubo HTTP API 之间插入智能代理层，提供：
 //!
-//! 1. **请求批处理**：在 50ms 窗口内收集同类请求，合并为一次 API 调用
+//! 1. **自动缓存**：读操作先查 SQLite 缓存，未命中才穿透 API 并回填
 //! 2. **预取**：根据当前 Tab 预测下一个可能请求，提前拉取
-//! 3. **智能路由**：根据请求类型自动选择缓存/穿透/批处理策略
-//! 4. **降级容错**：API 不可用时自动返回缓存数据
+//! 3. **熔断降级**：连续失败达到阈值后短路，避免雪崩
+//! 4. **指标采集**：统计缓存命中率、API 调用数、平均延迟、熔断次数
 //!
 //! 架构：
 //! ```
 //! commands.rs ──→ ProxyClient ──→ [CacheStore] ──→ IpfsApiClient ──→ Kubo HTTP
 //!                      │
-//!                      ├── BatchWindow (50ms)
-//!                      ├── PrefetchHints
+//!                      ├── PrefetchEngine
 //!                      └── CircuitBreaker
 //! ```
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, Notify};
+use tokio::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 use serde::Serialize;
 use crate::daemon::IpfsApiClient;
@@ -83,61 +82,6 @@ impl CircuitBreaker {
             };
             tracing::warn!("Circuit breaker OPEN ({} failures)", self.failure_count);
         }
-    }
-}
-
-// ════════════════════════════════════════════════════════════════
-// 请求批处理
-// ════════════════════════════════════════════════════════════════
-
-/// 批处理请求类型
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum BatchKey {
-    PinLs,
-    SwarmPeers,
-    StatsBw,
-    BitswapStat,
-    RepoStat,
-    Id,
-    Version,
-    Custom(String),
-}
-
-/// 单个批处理请求
-struct BatchedRequest<T: Clone + Send + 'static> {
-    key: BatchKey,
-    tx: tokio::sync::oneshot::Sender<Result<T, String>>,
-}
-
-/// 请求批处理器
-///
-/// 在指定时间窗口内收集同类请求，窗口结束后批量执行。
-struct BatchProcessor {
-    /// 等待窗口（毫秒）
-    window_ms: u64,
-    /// 待处理的请求
-    pending: Mutex<HashMap<BatchKey, Vec<Box<dyn FnOnce() + Send>>>>,
-    /// 通知有新请求到达
-    notify: Arc<Notify>,
-}
-
-impl BatchProcessor {
-    fn new(window_ms: u64) -> Self {
-        Self {
-            window_ms,
-            pending: Mutex::new(HashMap::new()),
-            notify: Arc::new(Notify::new()),
-        }
-    }
-
-    /// 提交一个请求到批处理队列（当前为直接执行模式）
-    async fn submit<T, F, Fut>(&self, _key: BatchKey, executor: F) -> Result<T, String>
-    where
-        T: Clone + Send + 'static,
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<T, String>> + Send,
-    {
-        executor().await
     }
 }
 
@@ -302,15 +246,14 @@ impl ProxyClient {
                         }
                     }
                 }
-                PrefetchHint::Pins => {
-                    if prefetch.should_prefetch("pins").await {
+                PrefetchHint::Pins
+                    if prefetch.should_prefetch("pins").await => {
                         if let Ok(pins) = api.pin_ls().await {
                             if let Ok(json) = serde_json::to_string(&pins) {
                                 cache.set_pins(&json);
                             }
                         }
                     }
-                }
                 _ => {}
             }
         });
@@ -377,7 +320,7 @@ impl ProxyClient {
                 return Ok(node);
             }
         }
-        let result = self.call_api(|api| async move { api.id().await.map_err(|e| e.into()) }).await?;
+        let result = self.call_api(|api| async move { api.id().await }).await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_node_info(&json);
         }
@@ -390,7 +333,7 @@ impl ProxyClient {
                 return Ok(stats);
             }
         }
-        let result = self.call_api(|api| async move { api.repo_stat().await.map_err(|e| e.into()) }).await?;
+        let result = self.call_api(|api| async move { api.repo_stat().await }).await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_repo_stats(&json);
         }
@@ -403,7 +346,7 @@ impl ProxyClient {
                 return Ok(peers);
             }
         }
-        let result = self.call_api(|api| async move { api.swarm_peers().await.map_err(|e| e.into()) }).await?;
+        let result = self.call_api(|api| async move { api.swarm_peers().await }).await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_peers(&json);
         }
@@ -416,7 +359,7 @@ impl ProxyClient {
                 return Ok(bw);
             }
         }
-        let result = self.call_api(|api| async move { api.stats_bw().await.map_err(|e| e.into()) }).await?;
+        let result = self.call_api(|api| async move { api.stats_bw().await }).await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_bandwidth(&json);
         }
@@ -429,7 +372,7 @@ impl ProxyClient {
                 return Ok(bs);
             }
         }
-        let result = self.call_api(|api| async move { api.bitswap_stat().await.map_err(|e| e.into()) }).await?;
+        let result = self.call_api(|api| async move { api.bitswap_stat().await }).await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_bitswap(&json);
         }
@@ -442,7 +385,7 @@ impl ProxyClient {
                 return Ok(pins);
             }
         }
-        let result = self.call_api(|api| async move { api.pin_ls().await.map_err(|e| e.into()) }).await?;
+        let result = self.call_api(|api| async move { api.pin_ls().await }).await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_pins(&json);
         }
@@ -470,7 +413,12 @@ mod tests {
     use crate::cache::CacheStore;
 
     fn test_cache() -> Arc<CacheStore> {
-        let path = std::env::temp_dir().join("ipfs-proxy-test.db");
+        // 每个测试用独立文件，避免并行执行时共享同一 DB 互相干扰
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir()
+            .join(format!("ipfs-proxy-test-{}-{}.db", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         Arc::new(CacheStore::new(path).unwrap())
     }

@@ -342,7 +342,12 @@ mod tests {
     use super::*;
 
     fn test_queue() -> OfflineQueue {
-        let path = std::env::temp_dir().join("ipfs-offline-queue-test.db");
+        // 每个测试用独立文件，避免并行执行时共享同一 DB 互相干扰
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir()
+            .join(format!("ipfs-offline-queue-test-{}-{}.db", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         OfflineQueue::new(path).unwrap()
     }
