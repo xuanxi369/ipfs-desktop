@@ -58,7 +58,9 @@ impl Backend for KuboBackend {
             pubsub: true,
             mfs: true,
             bitswap: true,
-            cid_version: 1,
+            // Kubo `add` 默认产 CIDv0（也支持 --cid-version=1 产 CIDv1）；
+            // 这里如实声明默认版本，与 Iroh 的 CIDv1-only 形成对照。
+            cid_version: 0,
         }
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "ipfs-desktop-rust"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -68,10 +68,13 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 async-trait = "0.1"
 
 # Phase 4: iroh 原生后端（optional feature）
-iroh = { version = "0.25", optional = true }
+# 注意：iroh 1.0 起 blobs/docs 已拆为独立 crate；本机原生 add/cat 走 iroh-blobs 的 FsStore。
+iroh = { version = "1", optional = true }
+iroh-blobs = { version = "0.103", optional = true, features = ["fs-store"] }
 
 [features]
-iroh-backend = ["iroh"]
+# 启用后编译 iroh_adapter.rs 的真实实现（node_info / add_file / cat）。
+iroh-backend = ["dep:iroh", "dep:iroh-blobs"]
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }

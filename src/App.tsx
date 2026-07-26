@@ -111,7 +111,19 @@ function formatRate(bytesPerSec: number): string {
   return formatBytes(bytesPerSec) + "/s";
 }
 
-type TabName = "dashboard" | "webui" | "files" | "pins" | "ipns";
+function formatUptime(secs: number): string {
+  if (secs <= 0) return "0m";
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const parts: string[] = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  parts.push(`${m}m`);
+  return parts.join(" ");
+}
+
+type TabName = "dashboard" | "webui" | "files" | "pins" | "ipns" | "iroh";
 
 interface DashboardTick {
   peers: { peers: { Peer: string; Addr: string }[] } | null;
@@ -131,11 +143,35 @@ function App() {
   const [uploads, setUploads] = useState<AddResult[]>([]);
   const [uploading, setUploading] = useState(false);
 
+  // ── Phase B/C: iroh 原生收发 + 路由状态 ──
+  const [irohInfo, setIrohInfo] = useState<{ peer_id: string; agent_version: string } | null>(null);
+  const [irohCid, setIrohCid] = useState("");
+  const [irohTicket, setIrohTicket] = useState("");
+  const [irohFetchInput, setIrohFetchInput] = useState("");
+  const [irohFetchResult, setIrohFetchResult] = useState<string>("");
+  const [irohBusy, setIrohBusy] = useState(false);
+  const [routePolicy, setRoutePolicy] = useState<string>("KuboOnly");
+
+  // ── Phase D1: 节点身份 ──
+  interface NodeIdentityInfo { label: string; created_at: number; kubo_peer_id: string | null; iroh_node_id: string | null; }
+  const [identity, setIdentity] = useState<NodeIdentityInfo | null>(null);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState("");
+
+  // ── Phase D3: 节点健康度 ──
+  interface NodeHealth {
+    app_uptime_secs: number; daemon_uptime_secs: number | null; kubo_running: boolean;
+    num_objects: number | null; repo_size: number | null; peers: number | null;
+    bytes_in: number | null; bytes_out: number | null; iroh_content_count: number | null;
+  }
+  const [health, setHealth] = useState<NodeHealth | null>(null);
+
   // ── A1 下载状态 ──
   const [downloadCid, setDownloadCid] = useState("");
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [catResult, setCatResult] = useState<string>("");
+  const [routeHint, setRouteHint] = useState<string>("");
 
   // ── A2 Pin 状态 ──
   const [pinList, setPinList] = useState<PinEntry[]>([]);
@@ -444,17 +480,133 @@ function App() {
 
   const isRunning = status.type === "Running";
 
+  // ── Phase C: 输入 CID 时显示它在当前策略下会路由到哪个后端（debounce）──
+  useEffect(() => {
+    const cid = downloadCid.trim();
+    if (!cid) { setRouteHint(""); return; }
+    const h = setTimeout(async () => {
+      try { setRouteHint(await invoke<string>("get_backend_route", { cid })); }
+      catch { setRouteHint(""); }
+    }, 300);
+    return () => clearTimeout(h);
+  }, [downloadCid]);
+
+  // ── Phase D1: 节点身份处理 ──
+  async function loadIdentity() {
+    try { setIdentity(await invoke<NodeIdentityInfo>("get_node_identity")); }
+    catch (e) { setError(`identity: ${formatError(e)}`); }
+  }
+  async function saveLabel() {
+    try {
+      const info = await invoke<NodeIdentityInfo>("set_node_label", { label: labelDraft.trim() });
+      setIdentity(info);
+      setEditingLabel(false);
+      setError("");
+    } catch (e) { setError(`identity: ${formatError(e)}`); }
+  }
+  async function exportIdentity() {
+    try {
+      const doc = await invoke<string>("export_identity");
+      await navigator.clipboard?.writeText(doc);
+      setError("");
+    } catch (e) { setError(`identity: ${formatError(e)}`); }
+  }
+
+  async function loadHealth() {
+    try { setHealth(await invoke<NodeHealth>("get_node_health")); }
+    catch (e) { setError(`health: ${formatError(e)}`); }
+  }
+
+  // ── Phase B/C: iroh 原生收发 + 路由处理 ──
+  async function loadIrohInfo() {
+    try {
+      const info = await invoke<{ peer_id: string; agent_version: string }>("iroh_node_info");
+      setIrohInfo(info);
+      setError("");
+    } catch (e) {
+      setIrohInfo(null);
+      setError(`iroh: ${formatError(e)}`);
+    }
+  }
+
+  async function loadRoutePolicy() {
+    try {
+      const p = await invoke<string>("get_route_policy");
+      setRoutePolicy(p);
+    } catch { /* ignore */ }
+  }
+
+  async function applyRoutePolicy(policy: string) {
+    try {
+      const p = await invoke<string>("set_route_policy", { policy });
+      setRoutePolicy(p);
+      setError("");
+    } catch (e) {
+      setError(`route policy: ${formatError(e)}`);
+    }
+  }
+
+  async function irohAddFile() {
+    try {
+      const selected = await open({ multiple: false, title: t("irohAddFile") });
+      if (!selected || typeof selected !== "string") return;
+      setIrohBusy(true);
+      const out = await invoke<{ cid: string; size: number; name: string }>("iroh_add_file", { filePath: selected });
+      setIrohCid(out.cid);
+      setIrohTicket("");
+      setError("");
+    } catch (e) {
+      setError(`iroh add: ${formatError(e)}`);
+    } finally {
+      setIrohBusy(false);
+    }
+  }
+
+  async function irohShare() {
+    if (!irohCid.trim()) return;
+    try {
+      setIrohBusy(true);
+      const ticket = await invoke<string>("iroh_share", { cid: irohCid.trim() });
+      setIrohTicket(ticket);
+      setError("");
+    } catch (e) {
+      setError(`iroh share: ${formatError(e)}`);
+    } finally {
+      setIrohBusy(false);
+    }
+  }
+
+  async function irohFetch() {
+    if (!irohFetchInput.trim()) return;
+    try {
+      setIrohBusy(true);
+      const savePath = await save({ title: t("saveDownloadAs") });
+      const res = await invoke<{ size: number; saved: string | null }>("iroh_fetch_ticket", {
+        ticket: irohFetchInput.trim(),
+        savePath: savePath || null,
+      });
+      setIrohFetchResult(
+        `${formatBytes(res.size)} — ${res.saved ? `${t("saved")}: ${res.saved}` : t("notSaved")}`
+      );
+      setError("");
+    } catch (e) {
+      setError(`iroh fetch: ${formatError(e)}`);
+    } finally {
+      setIrohBusy(false);
+    }
+  }
+
   return (
     <div className="container">
       <h1>{t("appTitle")}</h1>
 
       {/* ── Tab 导航 ── */}
       <nav className="tab-nav">
-        {(["dashboard", "webui", "files", "pins", "ipns"] as TabName[]).map((tab) => (
+        {(["dashboard", "webui", "files", "pins", "ipns", "iroh"] as TabName[]).map((tab) => (
           <button
             key={tab}
             className={`tab-btn ${activeTab === tab ? "active" : ""}`}
-            onClick={() => { setActiveTab(tab); if (tab === "dashboard" && isRunning) { loadDashboard(); invoke("set_prefetch_hint", { hint: "dashboard" }); } if (tab === "pins" && isRunning) { loadPins(); invoke("set_prefetch_hint", { hint: "pins" }); } if (tab === "ipns" && isRunning) { loadKeyList(); invoke("set_prefetch_hint", { hint: "ipns" }); } }}
+            onClick={() => { setActiveTab(tab); if (tab === "dashboard") { loadIdentity(); loadHealth(); } if (tab === "dashboard" && isRunning) { loadDashboard(); invoke("set_prefetch_hint", { hint: "dashboard" }); } if (tab === "pins" && isRunning) { loadPins(); invoke("set_prefetch_hint", { hint: "pins" }); } if (tab === "ipns" && isRunning) { loadKeyList(); invoke("set_prefetch_hint", { hint: "ipns" }); } if (tab === "iroh") { loadIrohInfo(); loadRoutePolicy(); } }}
             disabled={tab === "webui" && !isRunning}
           >
             {t(tab)}
@@ -467,6 +619,58 @@ function App() {
       {/* ═══════════════════════════════════════════════ */}
       {activeTab === "dashboard" && (
         <>
+          {/* ── Phase D1: 节点身份卡 ── */}
+          <div className="status-card">
+            <h2>🪪 {t("nodeIdentity")}</h2>
+            {identity ? (
+              <div className="status-details">
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", flexWrap: "wrap" }}>
+                  {editingLabel ? (
+                    <>
+                      <input className="cid-input small-input" value={labelDraft}
+                        placeholder={t("nodeLabel")}
+                        onChange={(e) => setLabelDraft(e.target.value)} />
+                      <button className="btn-small btn-download" onClick={saveLabel} disabled={!labelDraft.trim()}>💾 {t("save")}</button>
+                      <button className="btn-small" onClick={() => setEditingLabel(false)}>✕</button>
+                    </>
+                  ) : (
+                    <>
+                      <strong style={{ fontSize: "1.1em" }}>{identity.label}</strong>
+                      <button className="btn-small" onClick={() => { setLabelDraft(identity.label); setEditingLabel(true); }}>✏️ {t("edit")}</button>
+                    </>
+                  )}
+                </div>
+                <p style={{ fontSize: "0.8em", opacity: 0.65 }}>{t("since")}: {new Date(identity.created_at * 1000).toLocaleDateString()}</p>
+                {identity.kubo_peer_id && <p className="hash-cell" title={identity.kubo_peer_id}>Kubo: {identity.kubo_peer_id}</p>}
+                {identity.iroh_node_id && <p className="hash-cell" title={identity.iroh_node_id}>iroh: {identity.iroh_node_id}</p>}
+                <button className="btn-small btn-pin" style={{ marginTop: "6px" }} onClick={exportIdentity}>📋 {t("exportIdentity")}</button>
+              </div>
+            ) : (
+              <button className="btn-small btn-download" onClick={loadIdentity}>{t("loadIdentity")}</button>
+            )}
+          </div>
+
+          {/* ── Phase D3: 节点健康度 ── */}
+          {health && (
+            <div className="status-card">
+              <h2>💓 {t("nodeHealth")}</h2>
+              <div className="status-details">
+                <p>⏱ {t("appUptime")}: <strong>{formatUptime(health.app_uptime_secs)}</strong>
+                  {health.daemon_uptime_secs != null && <> · {t("nodeUptime")}: <strong>{formatUptime(health.daemon_uptime_secs)}</strong></>}
+                </p>
+                {health.num_objects != null && (
+                  <p>📦 {t("numObjects")}: {health.num_objects} · {t("repoSize")}: {formatBytes(health.repo_size ?? 0)}</p>
+                )}
+                {health.peers != null && <p>🔗 {t("connectedPeers")}: {health.peers}</p>}
+                {(health.bytes_in != null || health.bytes_out != null) && (
+                  <p>⬇ {formatBytes(health.bytes_in ?? 0)} · ⬆ {formatBytes(health.bytes_out ?? 0)} <span style={{ opacity: 0.6 }}>({t("contribution")})</span></p>
+                )}
+                {health.iroh_content_count != null && <p>🦀 iroh {t("contentItems")}: {health.iroh_content_count}</p>}
+                <button className="btn-small btn-download" style={{ marginTop: "4px" }} onClick={loadHealth}>🔄 {t("refresh")}</button>
+              </div>
+            </div>
+          )}
+
           {/* ── 状态卡片 ── */}
           <div className="status-card">
             <h2>{t("daemonStatus")}</h2>
@@ -859,6 +1063,11 @@ function App() {
                 {downloading ? "⏳" : "⬇"} {t("download")}
               </button>
             </div>
+            {routeHint && (
+              <div style={{ fontSize: "0.82em", opacity: 0.75, marginTop: "4px" }}>
+                🔀 {t("routeTo")}: <strong>{routeHint}</strong>
+              </div>
+            )}
           </div>
 
           {/* 下载进度条 */}
@@ -1061,6 +1270,92 @@ function App() {
             {keyList.length === 0 && isRunning && (
               <div className="empty-state">{t("noKeysGenerated")}</div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════ */}
+      {/* Phase B/C: iroh 原生收发 + 双栈路由              */}
+      {/* ═══════════════════════════════════════════════ */}
+      {activeTab === "iroh" && (
+        <div className="ipns-section">
+          <div className="ipns-card">
+            <h3>🦀 {t("irohNative")}</h3>
+            <p style={{ fontSize: "0.85em", opacity: 0.7 }}>{t("irohHint")}</p>
+            {irohInfo ? (
+              <div className="ipns-result">
+                {t("peerId")}: <span className="hash-cell">{irohInfo.peer_id}</span>
+                <br />
+                {t("version")}: {irohInfo.agent_version}
+              </div>
+            ) : (
+              <button onClick={loadIrohInfo} className="btn-small btn-download">
+                {t("loadIrohInfo")}
+              </button>
+            )}
+          </div>
+
+          {/* ── 原生添加 + 分享 ── */}
+          <div className="ipns-card">
+            <h3>📤 {t("irohAdd")}</h3>
+            <div className="input-row">
+              <button onClick={irohAddFile} disabled={irohBusy} className="btn-small btn-pin">
+                📁 {t("irohAddFile")}
+              </button>
+            </div>
+            {irohCid && (
+              <>
+                <div className="ipns-result success">
+                  CID: <span className="hash-cell">{irohCid}</span>
+                </div>
+                <div className="input-row">
+                  <button onClick={irohShare} disabled={irohBusy} className="btn-small btn-download">
+                    🎟 {t("shareTicket")}
+                  </button>
+                </div>
+              </>
+            )}
+            {irohTicket && (
+              <div className="preview-box">
+                <h3>{t("ticket")} ({t("copyTicket")})</h3>
+                <pre
+                  style={{ cursor: "pointer", whiteSpace: "pre-wrap", wordBreak: "break-all" }}
+                  title={t("copyTicket")}
+                  onClick={() => { navigator.clipboard?.writeText(irohTicket); }}
+                >{irohTicket}</pre>
+              </div>
+            )}
+          </div>
+
+          {/* ── 凭 ticket 收取 ── */}
+          <div className="ipns-card">
+            <h3>📥 {t("irohReceive")}</h3>
+            <div className="input-row">
+              <input
+                type="text"
+                className="cid-input"
+                placeholder={t("pasteTicket")}
+                value={irohFetchInput}
+                onChange={(e) => setIrohFetchInput(e.target.value)}
+              />
+              <button onClick={irohFetch} disabled={irohBusy || !irohFetchInput.trim()} className="btn-small btn-download">
+                ⬇ {t("fetchTicket")}
+              </button>
+            </div>
+            {irohFetchResult && <div className="ipns-result success">{irohFetchResult}</div>}
+          </div>
+
+          {/* ── 双栈路由策略 ── */}
+          <div className="ipns-card">
+            <h3>🔀 {t("routePolicy")}</h3>
+            <div className="input-row">
+              <select className="select-input" value={routePolicy} onChange={(e) => applyRoutePolicy(e.target.value)}>
+                <option value="KuboOnly">KuboOnly</option>
+                <option value="Auto">Auto</option>
+                <option value="IrohOnly">IrohOnly</option>
+              </select>
+            </div>
+            <p style={{ fontSize: "0.85em", opacity: 0.7 }}>{t("routePolicyHint")}</p>
           </div>
         </div>
       )}

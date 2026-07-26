@@ -507,7 +507,7 @@ impl IpfsApiClient {
 
     /// 从 IPFS 读取文件内容（cat — 流式返回原始字节）
     ///
-    /// 返回文件的完整内容。对于大文件建议使用 `cat_stream` 分段读取。
+    /// 返回文件的完整内容。对于大文件应使用 `cat_to_file` 真流式下载到磁盘。
     pub async fn cat(&self, cid: &str) -> Result<Vec<u8>, DaemonError> {
         let url = self.api_url(&format!("cat?arg={}", encode(cid)));
         tracing::info!("Cat file: {}", cid);
@@ -537,16 +537,25 @@ impl IpfsApiClient {
         Ok(bytes.to_vec())
     }
 
-    /// 流式读取 IPFS 文件内容，通过回调报告进度
+    /// 真流式下载 IPFS 文件到本地路径，通过回调报告进度
     ///
-    /// 适用于大文件下载。每读取一个 chunk 调用 `on_progress(loaded, total)`。
-    pub async fn cat_stream(
+    /// 适用于大文件下载：每读到一个 chunk 立即写入目标文件句柄，
+    /// **不把整个文件累积在内存中**。每写入一块调用 `on_progress(written, total)`。
+    /// 返回累计写入字节数。
+    pub async fn cat_to_file<F>(
         &self,
         cid: &str,
-        on_progress: impl Fn(u64, Option<u64>),
-    ) -> Result<Vec<u8>, DaemonError> {
+        output_path: &std::path::Path,
+        on_progress: F,
+    ) -> Result<u64, DaemonError>
+    where
+        F: Fn(u64, Option<u64>),
+    {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
         let url = self.api_url(&format!("cat?arg={}", encode(cid)));
-        tracing::info!("Cat stream: {}", cid);
+        tracing::info!("Cat stream to file: {} -> {:?}", cid, output_path);
 
         let response = self.client
             .post(&url)
@@ -567,20 +576,31 @@ impl IpfsApiClient {
         }
 
         let total = response.content_length();
-        let mut data = Vec::new();
-        let mut stream = response.bytes_stream();
 
-        use futures_util::StreamExt;
+        // 确保父目录存在，再创建目标文件句柄
+        if let Some(parent) = output_path.parent() {
+            tokio::fs::create_dir_all(parent).await
+                .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
+        }
+        let mut file = tokio::fs::File::create(output_path).await
+            .map_err(|e| DaemonError::IoError(format!("Failed to create output file: {}", e)))?;
+
+        let mut written: u64 = 0;
+        let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| {
                 DaemonError::ApiParseError(format!("Stream error: {}", e))
             })?;
-            data.extend_from_slice(&chunk);
-            on_progress(data.len() as u64, total);
+            file.write_all(&chunk).await
+                .map_err(|e| DaemonError::IoError(format!("Failed to write chunk: {}", e)))?;
+            written += chunk.len() as u64;
+            on_progress(written, total);
         }
+        file.flush().await
+            .map_err(|e| DaemonError::IoError(format!("Failed to flush output file: {}", e)))?;
 
-        tracing::info!("Cat stream completed: {} bytes", data.len());
-        Ok(data)
+        tracing::info!("Cat stream completed: {} bytes -> {:?}", written, output_path);
+        Ok(written)
     }
 
     /// 下载 IPFS 文件到本地路径
@@ -609,19 +629,29 @@ impl IpfsApiClient {
             )));
         }
 
-        let bytes = response.bytes().await
-            .map_err(|e| DaemonError::ApiParseError(format!("Failed to read get response: {}", e)))?;
-
-        // 确保父目录存在
+        // 确保父目录存在，再流式把 tar 响应写入文件（不整份驻留内存）
         if let Some(parent) = output_path.parent() {
             tokio::fs::create_dir_all(parent).await
                 .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
         }
 
-        tokio::fs::write(output_path, &bytes).await
-            .map_err(|e| DaemonError::IoError(format!("Failed to write output file: {}", e)))?;
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(output_path).await
+            .map_err(|e| DaemonError::IoError(format!("Failed to create output file: {}", e)))?;
+        let mut written: u64 = 0;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk
+                .map_err(|e| DaemonError::ApiParseError(format!("Failed to read get response: {}", e)))?;
+            file.write_all(&chunk).await
+                .map_err(|e| DaemonError::IoError(format!("Failed to write output file: {}", e)))?;
+            written += chunk.len() as u64;
+        }
+        file.flush().await
+            .map_err(|e| DaemonError::IoError(format!("Failed to flush output file: {}", e)))?;
 
-        tracing::info!("Get completed: {} bytes -> {:?}", bytes.len(), output_path);
+        tracing::info!("Get completed: {} bytes -> {:?}", written, output_path);
         Ok(())
     }
 

@@ -35,6 +35,9 @@ pub struct AppState {
     /// 健康监控任务句柄
     pub health_monitor: Arc<RwLock<Option<JoinHandle<()>>>>,
 
+    /// 连续自动重启计数（Phase D2 自愈防抖：超过上限则停手，健康一段时间后清零）
+    pub restart_attempts: Arc<std::sync::atomic::AtomicU32>,
+
     /// SQLite 缓存
     pub cache: Arc<CacheStore>,
 
@@ -67,6 +70,26 @@ pub struct AppState {
 
     /// Iroh 后端实例（Phase 4）
     pub iroh_backend: Arc<IrohBackend>,
+
+    /// 双栈路由器（Phase C）：在 Backend 缝之上按内容/策略选后端
+    pub backend_router: Arc<crate::backend_router::BackendRouter>,
+
+    /// 节点身份记录（Phase D1）：人类可读标签 ↔ 节点密码学身份
+    pub identity: Arc<crate::identity::IdentityStore>,
+
+    /// 应用启动时刻（Unix 秒，Phase D3 可观测性：计算运行时长）
+    pub app_started_at: u64,
+
+    /// 守护进程本次进入 Running 的时刻（Unix 秒；停止/未运行时为 None）
+    pub daemon_started_at: Arc<RwLock<Option<u64>>>,
+}
+
+/// 当前 Unix 秒
+pub(crate) fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl AppState {
@@ -101,8 +124,21 @@ impl AppState {
             });
 
         // Phase 4: 初始化双后端
-        let kubo_backend = KuboBackend::new(config.api_addr.clone());
-        let iroh_backend = IrohBackend::new(cache_dir.join("iroh-data"));
+        let kubo_backend = Arc::new(KuboBackend::new(config.api_addr.clone()));
+        let iroh_backend = Arc::new(IrohBackend::new(cache_dir.join("iroh-data")));
+
+        // Phase C: 双栈路由器（默认 KuboOnly，行为等价现有单栈）
+        // 来源标记 / provider 持久化到 cache_dir/{cid_origins,cid_providers}.json
+        let backend_router = Arc::new(crate::backend_router::BackendRouter::new(
+            kubo_backend.clone(),
+            iroh_backend.clone(),
+            Some(cache_dir.clone()),
+        ));
+
+        // Phase D1: 节点身份记录（人类可读标签，持久化到 cache_dir/node_identity.json）
+        let identity = Arc::new(crate::identity::IdentityStore::new(
+            cache_dir.join("node_identity.json"),
+        ));
 
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -111,6 +147,7 @@ impl AppState {
             api_client: Arc::new(RwLock::new(Some(api_client))),
             proxy_client: Arc::new(RwLock::new(Some(proxy_client))),
             health_monitor: Arc::new(RwLock::new(None)),
+            restart_attempts: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             cache: cache_arc,
             key_manager: Arc::new(key_manager),
             dashboard_poller: Arc::new(RwLock::new(None)),
@@ -120,8 +157,12 @@ impl AppState {
             bandwidth_monitor: Arc::new(std::sync::Mutex::new(BandwidthMonitor::new())),
             kubo_config: Arc::new(RwLock::new(None)),
             active_backend: Arc::new(RwLock::new(BackendType::Kubo)),
-            kubo_backend: Arc::new(kubo_backend),
-            iroh_backend: Arc::new(iroh_backend),
+            kubo_backend,
+            iroh_backend,
+            backend_router,
+            identity,
+            app_started_at: now_secs(),
+            daemon_started_at: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -165,13 +206,98 @@ impl AppState {
         self.api_client.read().await.clone()
     }
 
-    /// 启动健康监控后台任务
+    /// 重置自愈重启计数（用户手动启动 / 守护进程持续健康后调用）
+    pub fn reset_restart_attempts(&self) {
+        self.restart_attempts.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// 仅启动进程并置状态（**不**拉起任何后台循环）。
+    ///
+    /// 这是把「起进程」与「拉后台循环」拆开的关键——自愈重启只用这一层，
+    /// 从而**绝不递归调用 `spawn_health_monitor`**（否则互相递归的 async 无法 Send/定尺寸）。
+    async fn start_process(
+        &self,
+        app_handle: &tauri::AppHandle,
+    ) -> Result<(), crate::error::DaemonError> {
+        use crate::error::DaemonError;
+
+        let binary_path = match crate::daemon::BinaryFinder::find() {
+            Some(p) => p,
+            None => {
+                self.set_daemon_status(DaemonStatus::Failed {
+                    error: DaemonError::BinaryNotFound.to_string(),
+                })
+                .await;
+                let _ = app_handle.emit("daemon-status-changed", &self.get_daemon_status().await);
+                return Err(DaemonError::BinaryNotFound);
+            }
+        };
+
+        let config = self.get_config().await;
+        let repo_path = config.get_ipfs_path();
+        let flags = config.daemon_flags.clone();
+        let controller = DaemonController::new(binary_path, repo_path);
+
+        match controller.start(flags).await {
+            Ok(_) => {
+                if let Some(api_client) = self.get_api_client().await {
+                    match api_client.id().await {
+                        Ok(node_id) => {
+                            let pid = controller.get_pid().await.unwrap_or(0);
+                            let status = DaemonStatus::Running {
+                                pid,
+                                peer_id: node_id.id.clone(),
+                                api_addr: config.api_addr.clone(),
+                            };
+                            self.set_daemon_status(status.clone()).await;
+                            let _ = app_handle.emit("daemon-status-changed", &status);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to get node ID: {}", e);
+                            self.set_daemon_status(DaemonStatus::Starting).await;
+                        }
+                    }
+                }
+                self.set_daemon_controller(Some(controller)).await;
+                // 记录节点上线时刻（Phase D3：节点在线时长）
+                *self.daemon_started_at.write().await = Some(now_secs());
+                Ok(())
+            }
+            Err(e) => {
+                self.set_daemon_status(DaemonStatus::Failed { error: e.to_string() }).await;
+                let _ = app_handle.emit("daemon-status-changed", &self.get_daemon_status().await);
+                Err(e)
+            }
+        }
+    }
+
+    /// 启动守护进程的完整流程（供 `start_daemon` 命令使用）：起进程 + 拉起三个后台循环。
+    /// 仅从命令层调用，**不从健康监控里调用**（避免递归）。
+    pub async fn start_daemon_core(
+        &self,
+        app_handle: tauri::AppHandle,
+    ) -> Result<(), crate::error::DaemonError> {
+        self.start_process(&app_handle).await?;
+        self.spawn_health_monitor(app_handle.clone()).await;
+        self.spawn_dashboard_poller(app_handle.clone()).await;
+        self.spawn_replay_loop(app_handle).await;
+        Ok(())
+    }
+
+    /// 启动健康监控后台任务（Phase D2：探测意外死亡 → 自愈重启，带退避与上限）
     pub async fn spawn_health_monitor(&self, app_handle: tauri::AppHandle) {
         self.cancel_health_monitor().await;
 
+        /// 连续自动重启上限（超过则停手，避免崩溃循环）
+        const MAX_AUTO_RESTARTS: u32 = 5;
+        /// 持续健康多少个检查周期后清零重启预算（5s × 6 = 30s）
+        const HEALTHY_CHECKS_TO_RESET: u32 = 6;
+
         let state = self.clone();
         let handle = tokio::spawn(async move {
+            use std::sync::atomic::Ordering;
             tracing::info!("Health monitor started");
+            let mut healthy_checks: u32 = 0;
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
@@ -182,19 +308,59 @@ impl AppState {
                         break;
                     }
                     Some(controller) => {
-                        if !controller.is_running().await {
-                            tracing::error!("Health monitor: daemon process died unexpectedly!");
-                            let error_msg = "Daemon process exited unexpectedly (detected by health monitor)".to_string();
-                            state.set_daemon_status(
-                                DaemonStatus::Failed { error: error_msg.clone() }
-                            ).await;
-                            state.set_daemon_controller(None).await;
-                            if let Err(e) = app_handle.emit("daemon-status-changed",
-                                &DaemonStatus::Failed { error: error_msg }) {
-                                tracing::warn!("Failed to emit daemon-status-changed from health monitor: {}", e);
+                        if controller.is_running().await {
+                            // 持续健康达阈值 → 清零自愈预算（把「偶发崩溃」与「崩溃循环」区分开）
+                            healthy_checks += 1;
+                            if healthy_checks >= HEALTHY_CHECKS_TO_RESET
+                                && state.restart_attempts.load(Ordering::SeqCst) > 0
+                            {
+                                state.reset_restart_attempts();
+                                tracing::info!("Daemon healthy — auto-restart budget reset");
                             }
-                            break;
+                            continue;
                         }
+
+                        // ── 检测到意外死亡 ──
+                        tracing::error!("Health monitor: daemon process died unexpectedly!");
+                        let auto_restart = state.get_config().await.auto_restart;
+
+                        if auto_restart {
+                            let n = state.restart_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                            if n <= MAX_AUTO_RESTARTS {
+                                tracing::warn!("Auto-restarting daemon (attempt {}/{})", n, MAX_AUTO_RESTARTS);
+                                state.set_daemon_controller(None).await;
+                                state.set_daemon_status(DaemonStatus::Starting).await;
+                                let _ = app_handle.emit("daemon-status-changed", &DaemonStatus::Starting);
+                                // 线性退避，给系统喘息
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2 * n as u64)).await;
+                                // 只起进程（不重新 spawn 健康监控——本任务继续看护），避免递归 async。
+                                match state.start_process(&app_handle).await {
+                                    Ok(_) => {
+                                        // 轮询/重放随死亡停了，这里重新拉起；健康监控由本任务继续
+                                        state.spawn_dashboard_poller(app_handle.clone()).await;
+                                        state.spawn_replay_loop(app_handle.clone()).await;
+                                        healthy_checks = 0;
+                                        tracing::info!("Daemon auto-restarted; monitor continues");
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Auto-restart failed: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+                            tracing::error!("Auto-restart cap ({}) reached — giving up", MAX_AUTO_RESTARTS);
+                        }
+
+                        // 不自愈 / 已达上限 → 标记失败
+                        let error_msg = "Daemon process exited unexpectedly (detected by health monitor)".to_string();
+                        state.set_daemon_status(DaemonStatus::Failed { error: error_msg.clone() }).await;
+                        state.set_daemon_controller(None).await;
+                        if let Err(e) = app_handle.emit("daemon-status-changed",
+                            &DaemonStatus::Failed { error: error_msg }) {
+                            tracing::warn!("Failed to emit daemon-status-changed from health monitor: {}", e);
+                        }
+                        break;
                     }
                 }
             }
@@ -255,6 +421,10 @@ impl AppState {
                             Ok(b) => {
                                 let json = serde_json::to_string(&b).unwrap_or_default();
                                 state.cache.set_bandwidth(&json);
+                                // 喂给带宽监控器计算平滑速率（供 get_bandwidth_status 使用）
+                                if let Ok(mut mon) = state.bandwidth_monitor.lock() {
+                                    mon.sample(b.total_in, b.total_out);
+                                }
                                 Some(b)
                             }
                             Err(e) => { tracing::warn!("Poller bandwidth: {}", e); None }
@@ -428,8 +598,10 @@ mod tests {
     #[tokio::test]
     async fn test_state_update_config() {
         let state = AppState::new(AppConfig::default());
-        let mut new_config = AppConfig::default();
-        new_config.api_addr = "http://127.0.0.1:6001".to_string();
+        let new_config = AppConfig {
+            api_addr: "http://127.0.0.1:6001".to_string(),
+            ..AppConfig::default()
+        };
 
         state.update_config(new_config.clone()).await;
         assert_eq!(state.get_config().await.api_addr, "http://127.0.0.1:6001");

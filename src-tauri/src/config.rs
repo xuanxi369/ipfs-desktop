@@ -19,9 +19,18 @@ pub struct AppConfig {
     
     /// 是否开机自启动
     pub auto_launch: bool,
-    
+
     /// 是否自动垃圾回收
     pub auto_gc: bool,
+
+    /// 守护进程意外崩溃时是否自动重启（Phase D2 自愈）。
+    /// 旧配置文件缺此字段时按 serde 默认（true）——「可长期在线」的默认姿态。
+    #[serde(default = "default_true")]
+    pub auto_restart: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppConfig {
@@ -36,6 +45,7 @@ impl Default for AppConfig {
             ],
             auto_launch: false,
             auto_gc: true,
+            auto_restart: true,
         }
     }
 }
@@ -162,6 +172,15 @@ mod tests {
         assert!(config.validate().is_ok());
     }
     
+    #[test]
+    fn test_auto_restart_serde_default() {
+        // 旧配置文件（缺 auto_restart 字段）应反序列化为默认 true（零回归 + 自愈默认开）
+        let json = r#"{"ipfs_path":null,"api_addr":"http://127.0.0.1:5001","gateway_addr":"http://127.0.0.1:8080","daemon_flags":[],"auto_launch":false,"auto_gc":true}"#;
+        let cfg: AppConfig = serde_json::from_str(json).expect("legacy config should parse");
+        assert!(cfg.auto_restart, "missing auto_restart must default to true");
+        assert!(AppConfig::default().auto_restart);
+    }
+
     #[test]
     fn test_save_and_load() {
         let config = AppConfig::default();

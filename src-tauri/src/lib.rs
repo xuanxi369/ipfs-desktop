@@ -14,6 +14,8 @@ pub mod bandwidth;
 pub mod backend_trait;
 pub mod kubo_adapter;
 pub mod iroh_adapter;
+pub mod backend_router;
+pub mod identity;
 pub mod compat_test;
 pub mod benchmark;
 
@@ -115,7 +117,35 @@ pub fn run() {
             commands::get_backend_capabilities,
             commands::run_compat_test,
             commands::run_benchmark,
+            // Phase B (a): iroh 原生收发 + BlobTicket
+            commands::iroh_add_file,
+            commands::iroh_node_info,
+            commands::iroh_share,
+            commands::iroh_fetch_ticket,
+            commands::iroh_register_ticket,
+            commands::iroh_keep,
+            commands::iroh_unkeep,
+            commands::iroh_shutdown,
+            // Phase C (b): 双栈路由
+            commands::get_route_policy,
+            commands::set_route_policy,
+            commands::get_backend_route,
+            // Phase D1: 节点身份
+            commands::get_node_identity,
+            commands::set_node_label,
+            commands::export_identity,
+            // Phase D3: 节点健康度
+            commands::get_node_health,
         ])
+        .on_window_event(|window, event| {
+            // Phase D2「可长期在线」：关窗不退出，隐藏到托盘让节点后台常驻。
+            // 真正退出走托盘菜单的 Quit（app.exit）。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+                tracing::info!("Window close intercepted — hidden to tray, node keeps running");
+            }
+        })
         .setup(|app| {
             tracing::info!("Tauri setup complete");
             tracing::info!("App version: {}", app.package_info().version);

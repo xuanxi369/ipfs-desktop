@@ -163,8 +163,7 @@ mod tests {
     #[test]
     fn test_find_binary_returns_some_if_installed() {
         let result = BinaryFinder::find();
-        if result.is_some() {
-            let path = result.unwrap();
+        if let Some(path) = result {
             assert!(path.exists(), "Binary path should exist");
         }
     }

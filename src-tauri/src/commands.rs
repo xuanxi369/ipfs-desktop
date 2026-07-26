@@ -4,13 +4,12 @@ use crate::state::AppState;
 use crate::config::AppConfig;
 use crate::types::DaemonStatus;
 use crate::daemon::{
-    BinaryFinder, DaemonController,
     PinList, PinAddResult, PinRmResult,
     BandwidthStats, BitswapStats, NodeId, RepoStats, SwarmPeers,
     IpfsApiClient,
 };
 use crate::error::DaemonError;
-use crate::backend_trait::Backend;
+use crate::backend_trait::{Backend, BackendType};
 use serde::Serialize;
 
 /// 获取守护进程状态
@@ -34,93 +33,18 @@ pub async fn start_daemon(
         return Err(DaemonError::InvalidState);
     }
 
+    // 手动启动 → 重置自愈重启计数（用户主动操作，给一份新的自愈预算）
+    state.reset_restart_attempts();
+
     // 更新状态为启动中
     state.set_daemon_status(DaemonStatus::Starting).await;
-
-    // 发送事件到前端
     app_handle.emit("daemon-status-changed", &DaemonStatus::Starting)
         .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
 
     tracing::info!("Starting IPFS daemon...");
 
-    // 查找 IPFS 二进制文件
-    let binary_path = match BinaryFinder::find() {
-        Some(path) => {
-            tracing::info!("Found IPFS binary: {:?}", path);
-            path
-        }
-        None => {
-            tracing::error!("Could not find IPFS binary");
-            state.set_daemon_status(
-                DaemonStatus::Failed { error: DaemonError::BinaryNotFound.to_string() }
-            ).await;
-            app_handle.emit("daemon-status-changed", &state.get_daemon_status().await)
-                .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
-            return Err(DaemonError::BinaryNotFound);
-        }
-    };
-
-    // 获取配置
-    let config = state.get_config().await;
-    let repo_path = config.get_ipfs_path();
-    let flags = config.daemon_flags.clone();
-
-    // 创建守护进程控制器
-    let controller = DaemonController::new(binary_path, repo_path);
-
-    // 启动守护进程
-    match controller.start(flags).await {
-        Ok(_) => {
-            tracing::info!("Daemon started successfully");
-
-            // 获取节点信息
-            if let Some(api_client) = state.get_api_client().await {
-                match api_client.id().await {
-                    Ok(node_id) => {
-                        let pid = controller.get_pid().await.unwrap_or(0);
-                        let status = DaemonStatus::Running {
-                            pid,
-                            peer_id: node_id.id.clone(),
-                            api_addr: config.api_addr.clone(),
-                        };
-
-                        state.set_daemon_status(status.clone()).await;
-                        app_handle.emit("daemon-status-changed", &status)
-                            .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
-
-                        tracing::info!("Node ID: {}", node_id.id);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to get node ID: {}", e);
-                        // 即使无法获取节点 ID，守护进程也可能正在启动
-                        state.set_daemon_status(DaemonStatus::Starting).await;
-                    }
-                }
-            }
-
-            // 保存控制器
-            state.set_daemon_controller(Some(controller)).await;
-
-            // 启动健康监控（必须在控制器设置之后，否则监控会检测不到控制器而退出）
-            state.spawn_health_monitor(app_handle.clone()).await;
-
-            // Phase 2: 启动仪表盘自动轮询
-            state.spawn_dashboard_poller(app_handle.clone()).await;
-
-            // Phase 3: 启动离线队列重放循环
-            state.spawn_replay_loop(app_handle.clone()).await;
-
-            Ok(())
-        }
-        Err(e) => {
-            let err_str = e.to_string();
-            tracing::error!("Failed to start daemon: {}", err_str);
-            state.set_daemon_status(DaemonStatus::Failed { error: err_str.clone() }).await;
-            app_handle.emit("daemon-status-changed", &state.get_daemon_status().await)
-                .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
-            Err(e)
-        }
-    }
+    // 核心启动流程（与自愈重启共用同一实现）
+    state.start_daemon_core(app_handle).await
 }
 
 /// 停止守护进程
@@ -357,16 +281,41 @@ pub async fn get_webui_url(
 pub async fn add_file(
     state: State<'_, AppState>,
     file_path: String,
+    prefer: Option<String>,
 ) -> Result<crate::types::AddResult, DaemonError> {
     let path = std::path::PathBuf::from(&file_path);
     if !path.exists() {
         return Err(DaemonError::IoError(format!("File not found: {}", file_path)));
     }
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
-
-    client.add_file(&path).await
+    // 写侧策略：显式偏好（"iroh"/"kubo"）优先——「本地/信任圈内容优先 iroh」由此表达；
+    // 无偏好时按策略（Auto 默认落 Kubo 以保证公网可寻址）。省略参数即旧行为（零回归）。
+    let prefer_backend = match prefer.as_deref() {
+        Some("iroh") | Some("Iroh") => Some(BackendType::Iroh),
+        Some("kubo") | Some("Kubo") => Some(BackendType::Kubo),
+        _ => None,
+    };
+    match state.backend_router.choose_for_add(prefer_backend).await {
+        BackendType::Kubo => {
+            // 保留原有 Kubo 路径：用实时 api_client（尊重运行时改地址）
+            let client = state.get_api_client().await
+                .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+            let res = client.add_file(&path).await?;
+            state.backend_router.record_origin(&res.hash, BackendType::Kubo).await;
+            Ok(res)
+        }
+        BackendType::Iroh => {
+            let out = state.iroh_backend.add_file(&path).await
+                .map_err(|e| DaemonError::ApiError(e.to_string()))?;
+            state.backend_router.record_origin(&out.cid, BackendType::Iroh).await;
+            // 转为统一的 AddResult 形态，前端不感知后端差异
+            Ok(crate::types::AddResult {
+                hash: out.cid,
+                size: out.size.to_string(),
+                name: out.name,
+            })
+        }
+    }
 }
 
 /// 批量添加文件到 IPFS
@@ -381,9 +330,11 @@ pub async fn add_files(
     let mut results = Vec::new();
     for file_path in &file_paths {
         let path = std::path::PathBuf::from(file_path);
-        if path.exists() {
-            results.push(client.add_file(&path).await?);
+        // 不静默跳过：缺失文件立即报错，与单文件 add_file 行为一致
+        if !path.exists() {
+            return Err(DaemonError::IoError(format!("File not found: {}", file_path)));
         }
+        results.push(client.add_file(&path).await?);
     }
     Ok(results)
 }
@@ -448,10 +399,48 @@ pub async fn cat_file(
 ) -> Result<Vec<u8>, DaemonError> {
     tracing::info!("cat_file: {}", cid);
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    // 双栈韧性：按路由顺序尝试（Auto 下主后端取不到 → 自动 fallback 到另一个）。
+    // Kubo 腿仍用实时 api_client（尊重运行时改地址）。
+    let order = state.backend_router.cat_order(&cid).await;
+    let mut first_err: Option<DaemonError> = None;
+    for (i, backend) in order.iter().enumerate() {
+        match cat_via(&state, *backend, &cid).await {
+            Ok(bytes) => {
+                if i > 0 {
+                    // fallback 命中 → 回填来源标记，下次直达（自愈）
+                    state.backend_router.record_origin(&cid, *backend).await;
+                    tracing::info!("cat_file fallback hit on {:?} for {}", backend, cid);
+                }
+                return Ok(bytes);
+            }
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+    }
+    // 本地两栈都 miss → 网络 fallback（已知 iroh provider 则跨节点取回）
+    if let Some(Ok(bytes)) = state.backend_router.try_network_fetch(&cid).await {
+        tracing::info!("cat_file network-fallback hit for {}", cid);
+        return Ok(bytes);
+    }
+    Err(first_err.unwrap_or_else(|| DaemonError::ApiError("no backend produced content".to_string())))
+}
 
-    client.cat(&cid).await
+/// 用指定后端读取内容（Kubo 腿用实时 api_client，尊重运行时改地址）
+async fn cat_via(state: &AppState, backend: BackendType, cid: &str) -> Result<Vec<u8>, DaemonError> {
+    match backend {
+        BackendType::Kubo => {
+            let client = state.get_api_client().await
+                .ok_or_else(|| DaemonError::ApiError("API client not initialized".to_string()))?;
+            client.cat(cid).await
+        }
+        BackendType::Iroh => {
+            state.iroh_backend.cat(cid).await
+                .map_err(|e| DaemonError::ApiError(e.to_string()))
+        }
+    }
 }
 
 /// 流式下载文件（带进度事件）
@@ -471,8 +460,8 @@ pub async fn download_file(
 
     let output = std::path::PathBuf::from(&save_path);
 
-    // 使用流式下载
-    let data = client.cat_stream(&cid, |loaded, total| {
+    // 真流式下载：边收边写目标文件句柄，不把整个文件累积在内存中
+    let written = client.cat_to_file(&cid, &output, |loaded, total| {
         let _ = app_handle.emit("download-progress", &DownloadProgress {
             cid: cid.clone(),
             loaded,
@@ -480,16 +469,7 @@ pub async fn download_file(
         });
     }).await?;
 
-    // 确保父目录存在
-    if let Some(parent) = output.parent() {
-        tokio::fs::create_dir_all(parent).await
-            .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
-    }
-
-    tokio::fs::write(&output, &data).await
-        .map_err(|e| DaemonError::IoError(format!("Failed to write file: {}", e)))?;
-
-    tracing::info!("Download complete: {} bytes -> {:?}", data.len(), output);
+    tracing::info!("Download complete: {} bytes -> {:?}", written, output);
     Ok(())
 }
 
@@ -553,10 +533,16 @@ pub async fn add_pin(
 ) -> Result<PinAddResult, DaemonError> {
     tracing::info!("add_pin: {}", cid);
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
-
-    let result = client.pin_add(&cid).await?;
+    // 写命令同样经代理（统一熔断 + 指标）；代理不可用时回退到原始客户端
+    let result = if let Some(proxy) = state.get_proxy_client().await {
+        let cid_owned = cid.clone();
+        proxy.raw_call(|api| async move { api.pin_add(&cid_owned).await }).await
+            .map_err(DaemonError::ApiError)?
+    } else {
+        let client = state.get_api_client().await
+            .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+        client.pin_add(&cid).await?
+    };
     // 写操作后让 pin 缓存失效，保证下次读取拿到最新列表
     state.cache.invalidate("pins");
     Ok(result)
@@ -570,10 +556,16 @@ pub async fn remove_pin(
 ) -> Result<PinRmResult, DaemonError> {
     tracing::info!("remove_pin: {}", cid);
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
-
-    let result = client.pin_rm(&cid).await?;
+    // 写命令同样经代理（统一熔断 + 指标）；代理不可用时回退到原始客户端
+    let result = if let Some(proxy) = state.get_proxy_client().await {
+        let cid_owned = cid.clone();
+        proxy.raw_call(|api| async move { api.pin_rm(&cid_owned).await }).await
+            .map_err(DaemonError::ApiError)?
+    } else {
+        let client = state.get_api_client().await
+            .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+        client.pin_rm(&cid).await?
+    };
     // 写操作后让 pin 缓存失效，保证下次读取拿到最新列表
     state.cache.invalidate("pins");
     Ok(result)
@@ -1082,6 +1074,17 @@ pub async fn switch_backend(
         _ => return Err(DaemonError::ConfigError(format!("Unknown backend: {}", backend_type))),
     };
 
+    // 诚实防护：Iroh 后端目前是 stub，实际的文件 / Pin / IPNS 操作仍全部
+    // 硬编码走 Kubo HTTP（commands 未按 active_backend 路由）。若允许把活跃后端
+    // 切到 Iroh，状态会与真实行为脱节。因此在 iroh_adapter 完成真实实现之前，
+    // 这里明确拒绝切换，只保留其在基准 / 兼容性测试中的用途。
+    if matches!(new_type, crate::backend_trait::BackendType::Iroh) {
+        return Err(DaemonError::ApiError(
+            "Iroh 后端尚未接入实际操作（当前仅用于基准与兼容性测试）；\
+             文件 / Pin / IPNS 仍由 Kubo 处理，暂不支持切换为活跃后端".to_string(),
+        ));
+    }
+
     // 验证目标后端可用
     let available = match new_type {
         crate::backend_trait::BackendType::Kubo => state.kubo_backend.is_available().await,
@@ -1144,6 +1147,318 @@ pub async fn run_compat_test(
     let iroh = state.iroh_backend.as_ref().clone();
     let mut tester = crate::compat_test::CompatTester::new(kubo, iroh);
     Ok(tester.run_all().await)
+}
+
+// ════════════════════════════════════════════════════════════════
+// Phase B (a): iroh 原生收发 + BlobTicket 分享
+//
+// 这些命令直接走 iroh 原生后端（不经 Kubo）。未启用 `iroh-backend` feature
+// 时后端为 stub，命令会返回「需启用 feature」的错误，前端可据此提示。
+// ════════════════════════════════════════════════════════════════
+
+/// BackendError → DaemonError（前端统一错误模型）
+fn iroh_err(e: crate::backend_trait::BackendError) -> DaemonError {
+    DaemonError::ApiError(e.to_string())
+}
+
+/// 用 iroh 原生后端添加文件（内容寻址，返回 BLAKE3 hash 作为 cid）
+#[tauri::command]
+pub async fn iroh_add_file(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<crate::backend_trait::AddOutput, DaemonError> {
+    let path = std::path::PathBuf::from(&file_path);
+    if !path.exists() {
+        return Err(DaemonError::IoError(format!("File not found: {}", file_path)));
+    }
+    let out = state.iroh_backend.add_file(&path).await.map_err(iroh_err)?;
+    // 打上 iroh 来源标记，供 Auto 路由精确分发
+    state.backend_router.record_origin(&out.cid, BackendType::Iroh).await;
+    Ok(out)
+}
+
+/// 获取 iroh 节点信息（持久身份 / 版本）
+#[tauri::command]
+pub async fn iroh_node_info(
+    state: State<'_, AppState>,
+) -> Result<crate::backend_trait::NodeInfo, DaemonError> {
+    state.iroh_backend.node_info().await.map_err(iroh_err)
+}
+
+/// 为本地某个 iroh blob 生成可分享的 ticket 字符串
+///
+/// 对方用 `iroh_fetch_ticket` 即可跨节点收取内容。
+#[tauri::command]
+pub async fn iroh_share(
+    state: State<'_, AppState>,
+    cid: String,
+) -> Result<String, DaemonError> {
+    tracing::info!("iroh_share: {}", cid);
+    state.iroh_backend.share_ticket(&cid).await.map_err(iroh_err)
+}
+
+/// 用 ticket 从远端 iroh 节点收取内容，可选保存到本地路径
+///
+/// 返回 `{ cid, size, saved }`。
+#[tauri::command]
+pub async fn iroh_fetch_ticket(
+    state: State<'_, AppState>,
+    ticket: String,
+    save_path: Option<String>,
+) -> Result<serde_json::Value, DaemonError> {
+    tracing::info!("iroh_fetch_ticket (save_path={:?})", save_path);
+    // 解析 ticket 拿到 cid（收取后内容落入 iroh，标记来源）
+    let cid = crate::iroh_adapter::ticket_cid(&ticket);
+    let bytes = state.iroh_backend.fetch_ticket(&ticket).await.map_err(iroh_err)?;
+    if let Some(cid) = &cid {
+        // 内容已落入 iroh → 标记来源；同时记住 provider，供日后本地 miss 时网络重取
+        state.backend_router.record_origin(cid, BackendType::Iroh).await;
+        state.backend_router.record_provider(cid, &ticket).await;
+    }
+    let size = bytes.len();
+
+    let saved = if let Some(p) = save_path {
+        let path = std::path::PathBuf::from(&p);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await
+                .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
+        }
+        tokio::fs::write(&path, &bytes).await
+            .map_err(|e| DaemonError::IoError(format!("Failed to write file: {}", e)))?;
+        Some(p)
+    } else {
+        None
+    };
+
+    Ok(serde_json::json!({ "size": size, "saved": saved }))
+}
+
+/// keep-alive：让某 iroh blob 不被 GC 回收（命名持久 tag；对应 Kubo 的 pin）
+#[tauri::command]
+pub async fn iroh_keep(
+    state: State<'_, AppState>,
+    cid: String,
+) -> Result<(), DaemonError> {
+    tracing::info!("iroh_keep: {}", cid);
+    state.iroh_backend.keep(&cid).await.map_err(iroh_err)
+}
+
+/// 取消 keep-alive（删除命名 tag，内容此后可被 GC）
+#[tauri::command]
+pub async fn iroh_unkeep(
+    state: State<'_, AppState>,
+    cid: String,
+) -> Result<(), DaemonError> {
+    tracing::info!("iroh_unkeep: {}", cid);
+    state.iroh_backend.unkeep(&cid).await.map_err(iroh_err)
+}
+
+/// 关闭 iroh 网络/serving 栈（Phase D2 生命周期）；下次使用自动重建（重启）。
+#[tauri::command]
+pub async fn iroh_shutdown(
+    state: State<'_, AppState>,
+) -> Result<(), DaemonError> {
+    tracing::info!("iroh_shutdown requested");
+    state.iroh_backend.shutdown().await.map_err(iroh_err)
+}
+
+// ════════════════════════════════════════════════════════════════
+// Phase C (b): 双栈路由骨架
+// ════════════════════════════════════════════════════════════════
+
+/// 登记一个 BlobTicket 作为某 CID 的 provider（**不立即拉取**）。
+///
+/// 之后在 `Auto` 策略下 `cat` 该 CID 时，若本地两栈都没有，会自动从这个 provider
+/// 跨节点取回——「先记住去哪拿，用时再拿」的惰性跨节点内容发现。返回解析出的 CID。
+#[tauri::command]
+pub async fn iroh_register_ticket(
+    state: State<'_, AppState>,
+    ticket: String,
+) -> Result<String, DaemonError> {
+    let cid = crate::iroh_adapter::ticket_cid(&ticket).ok_or_else(|| {
+        DaemonError::ApiError(
+            "invalid ticket (build with --features iroh-backend to parse tickets)".to_string(),
+        )
+    })?;
+    state.backend_router.record_provider(&cid, &ticket).await;
+    tracing::info!("registered iroh provider for {}", cid);
+    Ok(cid)
+}
+
+/// 获取当前路由策略（KuboOnly / IrohOnly / Auto）
+#[tauri::command]
+pub async fn get_route_policy(
+    state: State<'_, AppState>,
+) -> Result<String, DaemonError> {
+    Ok(state.backend_router.policy().await.to_string())
+}
+
+/// 设置路由策略
+#[tauri::command]
+pub async fn set_route_policy(
+    state: State<'_, AppState>,
+    policy: String,
+) -> Result<String, DaemonError> {
+    let p = crate::backend_router::RoutePolicy::parse(&policy)
+        .ok_or_else(|| DaemonError::ConfigError(format!("Unknown route policy: {}", policy)))?;
+    state.backend_router.set_policy(p).await;
+    Ok(p.to_string())
+}
+
+/// 查询某个 CID 在当前策略下会被路由到哪个后端（不实际读取，只做决策展示）
+#[tauri::command]
+pub async fn get_backend_route(
+    state: State<'_, AppState>,
+    cid: String,
+) -> Result<String, DaemonError> {
+    let t = state.backend_router.choose_for_cid(&cid).await;
+    Ok(t.to_string())
+}
+
+// ════════════════════════════════════════════════════════════════
+// Phase D1: 节点身份（可命名 · 可验证 · 可展示）
+// ════════════════════════════════════════════════════════════════
+
+/// 组合后的节点身份（人类可读标签 + 两后端的密码学身份）
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeIdentityInfo {
+    pub label: String,
+    pub created_at: u64,
+    /// Kubo PeerID（守护进程运行时才有）
+    pub kubo_peer_id: Option<String>,
+    /// iroh EndpointId（自证公钥；feature 构建下为持久身份，否则为 stub 占位）
+    pub iroh_node_id: Option<String>,
+}
+
+/// 获取节点身份（标签 + 两后端 ID）
+#[tauri::command]
+pub async fn get_node_identity(
+    state: State<'_, AppState>,
+) -> Result<NodeIdentityInfo, DaemonError> {
+    let id = state.identity.load();
+
+    // Kubo PeerID 直接取自守护进程状态（无需额外查询）
+    let kubo_peer_id = match state.get_daemon_status().await {
+        DaemonStatus::Running { peer_id, .. } => Some(peer_id),
+        _ => None,
+    };
+
+    // iroh 节点身份（feature 构建下为持久 node_id）
+    let iroh_node_id = state.iroh_backend.node_info().await.ok().map(|n| n.peer_id);
+
+    Ok(NodeIdentityInfo {
+        label: id.label,
+        created_at: id.created_at,
+        kubo_peer_id,
+        iroh_node_id,
+    })
+}
+
+/// 设置节点的人类可读标签
+#[tauri::command]
+pub async fn set_node_label(
+    state: State<'_, AppState>,
+    label: String,
+) -> Result<NodeIdentityInfo, DaemonError> {
+    state.identity.set_label(&label).map_err(DaemonError::ConfigError)?;
+    tracing::info!("node label set to '{}'", label.trim());
+    get_node_identity(state).await
+}
+
+/// 导出可验证的身份文档（iroh node_id 本身是自证 Ed25519 公钥）
+#[tauri::command]
+pub async fn export_identity(
+    state: State<'_, AppState>,
+) -> Result<String, DaemonError> {
+    let info = get_node_identity(state).await?;
+    let doc = serde_json::json!({
+        "label": info.label,
+        "created_at": info.created_at,
+        "kubo_peer_id": info.kubo_peer_id,
+        "iroh_node_id": info.iroh_node_id,
+        "note": "iroh node_id is a self-certifying Ed25519 public key; a peer verifies it by connecting.",
+    });
+    serde_json::to_string_pretty(&doc)
+        .map_err(|e| DaemonError::ConfigError(e.to_string()))
+}
+
+// ════════════════════════════════════════════════════════════════
+// Phase D3: 节点健康度（「我的节点健康度」）
+// ════════════════════════════════════════════════════════════════
+
+/// 节点健康度快照（跨后端聚合，字段按可用性填充）
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeHealth {
+    /// 应用运行时长（秒）
+    pub app_uptime_secs: u64,
+    /// 守护进程本次在线时长（秒；未运行为 None）
+    pub daemon_uptime_secs: Option<u64>,
+    pub kubo_running: bool,
+    /// 仓库对象数 / 大小（Kubo）
+    pub num_objects: Option<u64>,
+    pub repo_size: Option<u64>,
+    /// 连接的对等节点数（Kubo）
+    pub peers: Option<usize>,
+    /// 累计接收 / 发送字节（Kubo；「贡献量」看 bytes_out）
+    pub bytes_in: Option<u64>,
+    pub bytes_out: Option<u64>,
+    /// iroh 本地内容条目数（feature 构建下有值，否则 None）
+    pub iroh_content_count: Option<u64>,
+}
+
+/// 获取节点健康度快照
+#[tauri::command]
+pub async fn get_node_health(
+    state: State<'_, AppState>,
+) -> Result<NodeHealth, DaemonError> {
+    let now = crate::state::now_secs();
+    let app_uptime_secs = now.saturating_sub(state.app_started_at);
+
+    let kubo_running = matches!(state.get_daemon_status().await, DaemonStatus::Running { .. });
+    let daemon_uptime_secs = if kubo_running {
+        state.daemon_started_at.read().await.map(|t| now.saturating_sub(t))
+    } else {
+        None
+    };
+
+    let (mut num_objects, mut repo_size, mut peers, mut bytes_in, mut bytes_out) =
+        (None, None, None, None, None);
+    if kubo_running {
+        if let Some(client) = state.get_api_client().await {
+            // 并行拉取（各自失败不影响其他）
+            let (repo, sw, bw) = tokio::join!(
+                client.repo_stat(),
+                client.swarm_peers(),
+                client.stats_bw(),
+            );
+            if let Ok(r) = repo {
+                num_objects = Some(r.num_objects);
+                repo_size = Some(r.repo_size);
+            }
+            if let Ok(s) = sw {
+                peers = Some(s.peers.len());
+            }
+            if let Ok(b) = bw {
+                bytes_in = Some(b.total_in);
+                bytes_out = Some(b.total_out);
+            }
+        }
+    }
+
+    // iroh 内容数（stub 构建为 None）
+    let iroh_content_count = state.iroh_backend.content_count().await.ok();
+
+    Ok(NodeHealth {
+        app_uptime_secs,
+        daemon_uptime_secs,
+        kubo_running,
+        num_objects,
+        repo_size,
+        peers,
+        bytes_in,
+        bytes_out,
+        iroh_content_count,
+    })
 }
 
 

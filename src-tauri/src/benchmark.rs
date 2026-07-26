@@ -204,6 +204,57 @@ impl MicroBenchmark {
         ).await
     }
 
+    /// 基准: add_file 与 cat 延迟（真实内容寻址往返）
+    ///
+    /// 两个后端对**同一个临时文件**做 add，再对各自返回的 CID 做 cat。
+    /// 这是「第一份真实 Kubo vs iroh add/cat 对比数据」的来源：
+    /// 某后端不可用时其对应操作记为失败（9999ms），不影响另一后端的数据。
+    pub async fn bench_add_cat(&self) -> Vec<BenchOpResult> {
+        // 准备一个小测试文件（内容固定，便于内容寻址复现）
+        let data: Vec<u8> = (0..16_384u32).map(|i| (i % 251) as u8).collect();
+        let tmp = std::env::temp_dir()
+            .join(format!("bench-addcat-{}.bin", std::process::id()));
+        if std::fs::write(&tmp, &data).is_err() {
+            return vec![];
+        }
+
+        let kubo = &self.kubo;
+        let iroh = &self.iroh;
+
+        // 先各 add 一次拿到 CID（供 cat 复用）；失败则 CID 为空 → cat 记为失败
+        let kubo_cid = kubo.add_file(&tmp).await.map(|o| o.cid).unwrap_or_default();
+        let iroh_cid = iroh.add_file(&tmp).await.map(|o| o.cid).unwrap_or_default();
+
+        // add_file 延迟（同一文件反复 add，内容寻址下幂等）
+        let tmp_k = tmp.clone();
+        let tmp_i = tmp.clone();
+        let mut results = self.bench_both(
+            "add_file",
+            move || { let p = tmp_k.clone(); async move {
+                kubo.add_file(&p).await.map(|_| ()).map_err(|e| e.to_string())
+            }},
+            move || { let p = tmp_i.clone(); async move {
+                iroh.add_file(&p).await.map(|_| ()).map_err(|e| e.to_string())
+            }},
+        ).await;
+
+        // cat 延迟
+        results.extend(self.bench_both(
+            "cat",
+            move || { let cid = kubo_cid.clone(); async move {
+                if cid.is_empty() { return Err("kubo add failed, no cid".to_string()); }
+                kubo.cat(&cid).await.map(|_| ()).map_err(|e| e.to_string())
+            }},
+            move || { let cid = iroh_cid.clone(); async move {
+                if cid.is_empty() { return Err("iroh add failed, no cid".to_string()); }
+                iroh.cat(&cid).await.map(|_| ()).map_err(|e| e.to_string())
+            }},
+        ).await);
+
+        let _ = std::fs::remove_file(&tmp);
+        results
+    }
+
     /// 运行全部基准测试
     pub async fn run_all(&self) -> BenchSuiteResult {
         let started = Instant::now();
@@ -213,6 +264,7 @@ impl MicroBenchmark {
         all_results.extend(self.bench_node_info().await);
         all_results.extend(self.bench_repo_stat().await);
         all_results.extend(self.bench_swarm_peers().await);
+        all_results.extend(self.bench_add_cat().await);
 
         // 计算总延迟和胜出者
         let kubo_avg: f64 = all_results.iter()
@@ -339,6 +391,41 @@ mod tests {
         } else {
             println!("SKIP: Kubo not running");
         }
+    }
+
+    /// 产出「第一份真实 Kubo vs iroh add/cat 对比数据」
+    ///
+    /// iroh 侧一定是真实数据（本机原生节点）；Kubo 侧仅在守护进程运行时为真实数据，
+    /// 否则记为不可用（9999ms）。用 `--nocapture` 查看对比表。
+    #[cfg(feature = "iroh-backend")]
+    #[tokio::test]
+    async fn test_real_add_cat_comparison() {
+        let kubo = KuboBackend::new("http://127.0.0.1:5001".to_string());
+        let dir = std::env::temp_dir().join(format!("bench-real-iroh-{}", std::process::id()));
+        let iroh = IrohBackend::new(dir);
+        let kubo_up = kubo.is_available().await;
+
+        let bench = MicroBenchmark::new(kubo, iroh);
+        let results = bench.bench_add_cat().await;
+
+        println!("\n=== 第一份真实 Kubo vs iroh add/cat 延迟对比 ===");
+        println!("(Kubo daemon {}) ", if kubo_up { "运行中 → 真实数据" } else { "未运行 → 记为不可用" });
+        println!("{:<10} {:<14} {:>10} {:>10} {:>10}", "op", "backend", "avg_ms", "min_ms", "p99_ms");
+        for r in &results {
+            println!("{:<10} {:<14} {:>10.3} {:>10.3} {:>10.3}",
+                r.operation, r.backend, r.avg_ms, r.min_ms, r.p99_ms);
+        }
+        println!("=================================================\n");
+
+        // iroh 侧必须是真实、成功的数据（远小于失败哨兵 9999ms）
+        let iroh_add = results.iter()
+            .find(|r| r.operation == "add_file" && r.backend == "Iroh (Rust)")
+            .expect("iroh add_file result present");
+        let iroh_cat = results.iter()
+            .find(|r| r.operation == "cat" && r.backend == "Iroh (Rust)")
+            .expect("iroh cat result present");
+        assert!(iroh_add.avg_ms < 5000.0, "iroh add should be real (got {}ms)", iroh_add.avg_ms);
+        assert!(iroh_cat.avg_ms < 5000.0, "iroh cat should be real (got {}ms)", iroh_cat.avg_ms);
     }
 
     #[test]

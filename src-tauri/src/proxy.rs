@@ -32,7 +32,9 @@ use crate::cache::CacheStore;
 enum CircuitState {
     Closed,             // 正常
     Open { until: Instant }, // 熔断中，直到指定时间
-    HalfOpen,           // 半开（试探性恢复）
+    /// 半开（试探性恢复）；`probing` 表示已有一个探针请求在途，
+    /// 期间其余请求继续被短路，直到探针 record_success/record_failure 出结果。
+    HalfOpen { probing: bool },
 }
 
 /// 简单熔断器：连续失败 N 次后熔断 M 秒
@@ -55,12 +57,21 @@ impl CircuitBreaker {
 
     /// 是否允许请求通过
     fn allow(&mut self) -> bool {
-        match &self.state {
+        match &mut self.state {
             CircuitState::Closed => true,
-            CircuitState::HalfOpen => true,
+            CircuitState::HalfOpen { probing } => {
+                if *probing {
+                    // 已有探针在途，其余请求继续短路
+                    false
+                } else {
+                    *probing = true;
+                    true
+                }
+            }
             CircuitState::Open { until } => {
                 if Instant::now() >= *until {
-                    self.state = CircuitState::HalfOpen;
+                    // 进入半开，放行这一个探针
+                    self.state = CircuitState::HalfOpen { probing: true };
                     true
                 } else {
                     false
