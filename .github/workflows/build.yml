@@ -1,0 +1,181 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 前端 TypeScript 检查 ──
+  frontend-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  # ── 后端构建 + 测试 ──
+  build-and-test:
+    needs: frontend-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: ipfs-desktop-rust_amd64
+            ext: ""
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: ipfs-desktop-rust_x64
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: ipfs-desktop-rust_arm64
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: ipfs-desktop-rust_x64
+            ext: ".exe"
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Cargo test (unit)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build (release)
+        run: cargo build --manifest-path src-tauri/Cargo.toml --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: src-tauri/target/${{ matrix.target }}/release/ipfs-desktop-rust${{ matrix.ext }}
+
+  # ── Tauri 打包 (仅 tag) ──
+  tauri-build:
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bundle: deb,appimage
+          - os: macos-latest
+            bundle: dmg
+          - os: windows-latest
+            bundle: msi,nsis
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+      - run: npm run tauri build -- --bundles ${{ matrix.bundle }}
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ runner.os }}
+          path: src-tauri/target/release/bundle/
+
+  # ── 创建 GitHub Release ──
+  create-release:
+    needs: tauri-build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Generate updater JSON
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "Version: $VERSION"
+          # 创建 updater JSON
+          cat > latest.json << EOF
+          {
+            "version": "v$VERSION",
+            "notes": "See https://github.com/\${GITHUB_REPOSITORY}/releases/tag/v$VERSION",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-x86_64": { "signature": "", "url": "https://github.com/\${GITHUB_REPOSITORY}/releases/download/v$VERSION/ipfs-desktop-rust_x64.app.tar.gz" },
+              "darwin-aarch64": { "signature": "", "url": "https://github.com/\${GITHUB_REPOSITORY}/releases/download/v$VERSION/ipfs-desktop-rust_aarch64.app.tar.gz" },
+              "linux-x86_64": { "signature": "", "url": "https://github.com/\${GITHUB_REPOSITORY}/releases/download/v$VERSION/ipfs-desktop-rust_amd64.AppImage.tar.gz" },
+              "windows-x86_64": { "signature": "", "url": "https://github.com/\${GITHUB_REPOSITORY}/releases/download/v$VERSION/ipfs-desktop-rust_x64.msi.zip" }
+            }
+          }
+          EOF
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ github.ref_name }}"
+          draft: true
+          files: |
+            bundles-*/**/*
+          body: |
+            ## IPFS Desktop Rust ${{ github.ref_name }}
+
+            ### 🚀 Highlights
+            - Built with Tauri 2 + Rust + React
+
+            ### 📦 Downloads
+            See attached artifacts for your platform.
+
+            ### 🔄 Auto Update
+            The updater JSON is available at:
+            `https://github.com/${{ github.repository }}/releases/latest/download/latest.json`

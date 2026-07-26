@@ -8,4 +8,9 @@ mod api_client;
 
 pub use binary::BinaryFinder;
 pub use controller::DaemonController;
-pub use api_client::IpfsApiClient;
+pub use api_client::{
+    IpfsApiClient, NodeId, RepoStats, VersionInfo, SwarmPeers, PeerInfo,
+    PinList, PinEntry, PinAddResult, PinRmResult,
+    BandwidthStats, BitswapStats,
+    IpnsPublishResult, IpnsResolveResult, KeyGenResult, KeyListResult, KeyEntry,
+};

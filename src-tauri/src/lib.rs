@@ -1,9 +1,21 @@
 // 模块声明
-mod commands;
-mod config;
-mod daemon;
-mod state;
-mod types;
+pub mod commands;
+pub mod config;
+pub mod daemon;
+pub mod error;
+pub mod state;
+pub mod tray;
+pub mod types;
+pub mod cache;
+pub mod keyring;
+pub mod proxy;
+pub mod offline_queue;
+pub mod bandwidth;
+pub mod backend_trait;
+pub mod kubo_adapter;
+pub mod iroh_adapter;
+pub mod compat_test;
+pub mod benchmark;
 
 use config::AppConfig;
 use state::AppState;
@@ -60,6 +72,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_daemon_status,
@@ -69,10 +82,48 @@ pub fn run() {
             commands::get_config,
             commands::update_config,
             commands::get_node_id,
+            commands::open_webui,
+            commands::get_webui_url,
+            commands::add_file,
+            commands::add_files,
+            commands::add_file_with_progress,
+            commands::set_auto_launch,
+            commands::get_auto_launch,
+            commands::cat_file,
+            commands::download_file,
+            commands::get_file_size,
+            commands::get_pin_list,
+            commands::add_pin,
+            commands::remove_pin,
+            commands::get_dashboard_stats,
+            commands::get_cached_dashboard,
+            commands::generate_key,
+            commands::list_keys,
+            commands::delete_key,
+            commands::ipns_publish,
+            commands::ipns_resolve,
+            commands::get_proxy_stats,
+            commands::set_prefetch_hint,
+            commands::get_offline_queue,
+            commands::flush_offline_queue,
+            commands::get_bandwidth_config,
+            commands::set_bandwidth_config,
+            commands::get_bandwidth_status,
+            commands::add_file_safe,
+            commands::get_active_backend,
+            commands::switch_backend,
+            commands::get_backend_capabilities,
+            commands::run_compat_test,
+            commands::run_benchmark,
         ])
         .setup(|app| {
             tracing::info!("Tauri setup complete");
             tracing::info!("App version: {}", app.package_info().version);
+            
+            // 初始化系统托盘（manage 保持 TrayIcon 存活，防止被 Drop 移除）
+            let tray = tray::setup_tray(&app.handle())?;
+            app.handle().manage(tray);
+            
             Ok(())
         })
         .run(tauri::generate_context!())

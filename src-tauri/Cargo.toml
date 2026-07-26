@@ -17,9 +17,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
 [dependencies]
 # Tauri 核心
-tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
@@ -33,7 +36,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # HTTP 客户端（IPFS API）
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 
 # 日志
 tracing = "0.1"
@@ -44,10 +47,36 @@ tracing-appender = "0.2"
 anyhow = "1"
 thiserror = "1"
 
+# 自动启动
+auto-launch = "0.6"
+
+# 自动更新
+tauri-plugin-updater = "2"
+
 # 工具
 dirs = "5"
 which = "6"
 chrono = "0.4"
+open = "5"
+futures-util = "0.3"
+
+# SQLite 缓存
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# 加密和密钥
+ed25519-dalek = "2"
+rand = "0.8"
+base64ct = { version = "0.1", features = ["std"] }
+keyring = "2"
+
+# Phase 4: Backend trait
+async-trait = "0.1"
+
+# Phase 4: iroh 原生后端（optional feature）
+iroh = { version = "0.25", optional = true }
+
+[features]
+iroh-backend = ["iroh"]
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }
