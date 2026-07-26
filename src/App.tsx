@@ -202,6 +202,10 @@ function App() {
       const tick = event.payload;
       setDashboard((prev) => prev ? { ...prev, ...tick } : ({ node_id: null, version: null, repo: tick.repo || null, peers: tick.peers || null, bandwidth: tick.bandwidth || null, bitswap: tick.bitswap || null, pin_count: 0 } as DashboardStats));
       setCacheHit(false);
+      // Phase 3: 更新带宽实时状态
+      if (tick.bandwidth) {
+        setBwStatus({ rate_in: tick.bandwidth.rate_in, rate_out: tick.bandwidth.rate_out, total_in: tick.bandwidth.total_in, total_out: tick.bandwidth.total_out });
+      }
     });
     const unlistenReplay = listen<{success:number;failed:number;remaining:number}>("replay-progress", (event) => {
       if (!mounted) return;
@@ -318,6 +322,11 @@ function App() {
       const stats = await invoke<DashboardStats>("get_cached_dashboard");
       setDashboard(stats);
       setCacheHit(true);
+      // Phase 3: 同时加载代理统计
+      try {
+        const ps = await invoke<{total_requests:number;cache_hits:number;api_calls:number;circuit_open_count:number;avg_latency_ms:number}>("get_proxy_stats");
+        setProxyStats(ps);
+      } catch { /* proxy stats are optional */ }
       setError("");
     } catch (e) {
       // 缓存失败则回退到直接 API 查询
@@ -507,6 +516,7 @@ function App() {
               <h2>{t("nodeDashboard")}</h2>
               <button onClick={loadDashboard} disabled={!isRunning || dashLoading} className="btn-small">
                 {dashLoading ? "⏳" : "🔄"} {t("refresh")}
+                {cacheHit && <span className="cache-indicator">{t("cacheIndicator")}</span>}
               </button>
             </div>
 
@@ -642,6 +652,11 @@ function App() {
                 setBackendCaps(caps);
               } catch (e) { setError(formatError(e)); }
             }} className="btn-small">{t("viewCapabilities")}</button>
+            {backendCaps && (
+              <span className="backend-caps-badge" title={JSON.stringify(backendCaps, null, 2)}>
+                IPNS:{(backendCaps as any).ipns ? "✅" : "❌"} Pin:{(backendCaps as any).pinning ? "✅" : "❌"}
+              </span>
+            )}
             <button onClick={async () => {
               try {
                 setBenchRunning(true);

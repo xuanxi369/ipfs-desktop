@@ -679,6 +679,14 @@ footer p {
 
 .dash-value.red { color: #c62828; }
 
+/* ---- Phase 4: 后端能力徽章 ---- */
+.backend-caps-badge {
+  font-size: 0.72em;
+  color: #78909c;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
 /* ---- Phase 4: 后端选择器 + 测试结果 ---- */
 .backend-bar {
   display: flex;
