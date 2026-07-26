@@ -206,6 +206,13 @@ impl ProxyClient {
         self.stats.read().await.clone()
     }
 
+    /// 记录一次缓存命中（供所有走缓存的 get_* 方法统一调用）
+    async fn record_cache_hit(&self) {
+        let mut stats = self.stats.write().await;
+        stats.total_requests += 1;
+        stats.cache_hits += 1;
+    }
+
     /// 设置预取提示（从前端收到 Tab 切换事件时调用）
     pub async fn set_prefetch_hint(&self, hint: PrefetchHint) {
         self.prefetch.set_active(hint).await;
@@ -314,9 +321,7 @@ impl ProxyClient {
         // 先查缓存
         if let Some(cached) = self.cache.get_node_info() {
             if let Ok(node) = serde_json::from_str(&cached) {
-                let mut stats = self.stats.write().await;
-                stats.total_requests += 1;
-                stats.cache_hits += 1;
+                self.record_cache_hit().await;
                 return Ok(node);
             }
         }
@@ -330,6 +335,7 @@ impl ProxyClient {
     pub async fn get_repo_stats(&self) -> Result<crate::daemon::RepoStats, String> {
         if let Some(cached) = self.cache.get_repo_stats() {
             if let Ok(stats) = serde_json::from_str(&cached) {
+                self.record_cache_hit().await;
                 return Ok(stats);
             }
         }
@@ -343,6 +349,7 @@ impl ProxyClient {
     pub async fn get_swarm_peers(&self) -> Result<crate::daemon::SwarmPeers, String> {
         if let Some(cached) = self.cache.get_peers() {
             if let Ok(peers) = serde_json::from_str(&cached) {
+                self.record_cache_hit().await;
                 return Ok(peers);
             }
         }
@@ -356,6 +363,7 @@ impl ProxyClient {
     pub async fn get_bandwidth(&self) -> Result<crate::daemon::BandwidthStats, String> {
         if let Some(cached) = self.cache.get_bandwidth() {
             if let Ok(bw) = serde_json::from_str(&cached) {
+                self.record_cache_hit().await;
                 return Ok(bw);
             }
         }
@@ -369,6 +377,7 @@ impl ProxyClient {
     pub async fn get_bitswap(&self) -> Result<crate::daemon::BitswapStats, String> {
         if let Some(cached) = self.cache.get_bitswap() {
             if let Ok(bs) = serde_json::from_str(&cached) {
+                self.record_cache_hit().await;
                 return Ok(bs);
             }
         }
@@ -382,6 +391,7 @@ impl ProxyClient {
     pub async fn get_pin_list(&self) -> Result<crate::daemon::PinList, String> {
         if let Some(cached) = self.cache.get_pins() {
             if let Ok(pins) = serde_json::from_str(&cached) {
+                self.record_cache_hit().await;
                 return Ok(pins);
             }
         }

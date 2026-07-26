@@ -50,24 +50,19 @@ thiserror = "1"
 # 自动启动
 auto-launch = "0.6"
 
-# 自动更新
-tauri-plugin-updater = "2"
-
 # 工具
 dirs = "5"
 which = "6"
 chrono = "0.4"
 open = "5"
 futures-util = "0.3"
+# 流式文件上传（分块读取，避免整文件驻留内存）
+tokio-util = { version = "0.7", features = ["io"] }
+# 查询参数百分号编码
+urlencoding = "2"
 
 # SQLite 缓存
 rusqlite = { version = "0.31", features = ["bundled"] }
-
-# 加密和密钥
-ed25519-dalek = "2"
-rand = "0.8"
-base64 = "0.22"
-keyring = "2"
 
 # Phase 4: Backend trait
 async-trait = "0.1"

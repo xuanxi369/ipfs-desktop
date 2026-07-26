@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
 use std::time::Duration;
+use urlencoding::encode;
 use crate::error::DaemonError;
 use crate::types::AddResult;
 
@@ -394,9 +395,28 @@ impl IpfsApiClient {
     /// 添加文件到 IPFS（写入操作，POST multipart）
     ///
     /// 将本地文件上传到 IPFS 网络，返回文件哈希。
+    /// 内部走分块流式上传，避免把整个文件读进内存。
     pub async fn add_file(&self, file_path: &std::path::Path) -> Result<AddResult, DaemonError> {
+        self.add_file_streaming(file_path, |_, _| {}).await
+    }
+
+    /// 流式添加文件到 IPFS，通过回调报告上传进度
+    ///
+    /// 分块读取本地文件并流式上传（不整文件驻留内存），
+    /// 每读取一个 chunk 调用 `on_progress(sent, total)`。
+    pub async fn add_file_streaming<F>(
+        &self,
+        file_path: &std::path::Path,
+        on_progress: F,
+    ) -> Result<AddResult, DaemonError>
+    where
+        F: Fn(u64, u64) + Send + Sync + 'static,
+    {
+        use futures_util::StreamExt;
+        use tokio_util::io::ReaderStream;
+
         let url = self.api_url("add?progress=false");
-        tracing::info!("Adding file to IPFS: {:?}", file_path);
+        tracing::info!("Adding file to IPFS (streaming): {:?}", file_path);
 
         let file_name = file_path
             .file_name()
@@ -404,10 +424,25 @@ impl IpfsApiClient {
             .unwrap_or("unnamed")
             .to_string();
 
-        let file_bytes = tokio::fs::read(file_path).await
-            .map_err(|e| DaemonError::IoError(format!("Failed to read file: {}", e)))?;
+        let total = tokio::fs::metadata(file_path).await
+            .map_err(|e| DaemonError::IoError(format!("Failed to stat file: {}", e)))?
+            .len();
 
-        let part = reqwest::multipart::Part::bytes(file_bytes)
+        let file = tokio::fs::File::open(file_path).await
+            .map_err(|e| DaemonError::IoError(format!("Failed to open file: {}", e)))?;
+
+        // 分块流：每读到一块就累加已发送字节并回调
+        let mut sent: u64 = 0;
+        let progress_stream = ReaderStream::new(file).map(move |chunk| {
+            if let Ok(ref bytes) = chunk {
+                sent += bytes.len() as u64;
+                on_progress(sent, total);
+            }
+            chunk
+        });
+
+        let body = reqwest::Body::wrap_stream(progress_stream);
+        let part = reqwest::multipart::Part::stream_with_length(body, total)
             .file_name(file_name.clone())
             .mime_str("application/octet-stream")
             .map_err(|e| DaemonError::ApiError(format!("Failed to create multipart: {}", e)))?;
@@ -446,7 +481,7 @@ impl IpfsApiClient {
 
     /// 列出目录中的文件（只读，GET）
     pub async fn ls(&self, cid: &str) -> Result<serde_json::Value, DaemonError> {
-        let url = self.api_url(&format!("ls?arg={}", cid));
+        let url = self.api_url(&format!("ls?arg={}", encode(cid)));
         tracing::debug!("Listing: {}", url);
 
         let response = self.client
@@ -474,7 +509,7 @@ impl IpfsApiClient {
     ///
     /// 返回文件的完整内容。对于大文件建议使用 `cat_stream` 分段读取。
     pub async fn cat(&self, cid: &str) -> Result<Vec<u8>, DaemonError> {
-        let url = self.api_url(&format!("cat?arg={}", cid));
+        let url = self.api_url(&format!("cat?arg={}", encode(cid)));
         tracing::info!("Cat file: {}", cid);
 
         let response = self.client
@@ -510,7 +545,7 @@ impl IpfsApiClient {
         cid: &str,
         on_progress: impl Fn(u64, Option<u64>),
     ) -> Result<Vec<u8>, DaemonError> {
-        let url = self.api_url(&format!("cat?arg={}", cid));
+        let url = self.api_url(&format!("cat?arg={}", encode(cid)));
         tracing::info!("Cat stream: {}", cid);
 
         let response = self.client
@@ -553,7 +588,7 @@ impl IpfsApiClient {
     /// 使用 ipfs get 将文件/dir 保存到本地。
     /// 注意：IPFS HTTP API 的 /get 返回 tar 流，这里直接保存到指定路径。
     pub async fn get(&self, cid: &str, output_path: &std::path::Path) -> Result<(), DaemonError> {
-        let url = self.api_url(&format!("get?arg={}&archive=true", cid));
+        let url = self.api_url(&format!("get?arg={}&archive=true", encode(cid)));
         tracing::info!("Get file: {} -> {:?}", cid, output_path);
 
         let response = self.client
@@ -592,7 +627,7 @@ impl IpfsApiClient {
 
     /// 获取文件大小（通过 stat 端点）
     pub async fn file_size(&self, cid: &str) -> Result<u64, DaemonError> {
-        let url = self.api_url(&format!("files/stat?arg=/ipfs/{}", cid));
+        let url = self.api_url(&format!("files/stat?arg=/ipfs/{}", encode(cid)));
         tracing::debug!("Stat file: {}", cid);
 
         let response = self.client
@@ -662,7 +697,7 @@ impl IpfsApiClient {
 
     /// 添加 Pin
     pub async fn pin_add(&self, cid: &str) -> Result<PinAddResult, DaemonError> {
-        let url = self.api_url(&format!("pin/add?arg={}", cid));
+        let url = self.api_url(&format!("pin/add?arg={}", encode(cid)));
         tracing::info!("Pinning: {}", cid);
 
         let response = self.client
@@ -692,7 +727,7 @@ impl IpfsApiClient {
 
     /// 移除 Pin
     pub async fn pin_rm(&self, cid: &str) -> Result<PinRmResult, DaemonError> {
-        let url = self.api_url(&format!("pin/rm?arg={}", cid));
+        let url = self.api_url(&format!("pin/rm?arg={}", encode(cid)));
         tracing::info!("Unpinning: {}", cid);
 
         let response = self.client
@@ -785,7 +820,7 @@ impl IpfsApiClient {
     ) -> Result<IpnsPublishResult, DaemonError> {
         let url = self.api_url(&format!(
             "name/publish?arg={}&key={}&lifetime={}",
-            cid, key_name, lifetime
+            encode(cid), encode(key_name), encode(lifetime)
         ));
         tracing::info!("IPNS publish: {} -> {}", cid, key_name);
 
@@ -812,7 +847,7 @@ impl IpfsApiClient {
 
     /// 解析 IPNS 名称
     pub async fn name_resolve(&self, name: &str) -> Result<IpnsResolveResult, DaemonError> {
-        let url = self.api_url(&format!("name/resolve?arg={}", name));
+        let url = self.api_url(&format!("name/resolve?arg={}", encode(name)));
         tracing::info!("IPNS resolve: {}", name);
 
         let response = self.client
@@ -838,7 +873,7 @@ impl IpfsApiClient {
 
     /// 生成新的 IPNS 密钥（由 Kubo 管理）
     pub async fn key_gen(&self, name: &str) -> Result<KeyGenResult, DaemonError> {
-        let url = self.api_url(&format!("key/gen?arg={}&type=ed25519", name));
+        let url = self.api_url(&format!("key/gen?arg={}&type=ed25519", encode(name)));
         tracing::info!("Key gen: {}", name);
 
         let response = self.client
@@ -888,6 +923,29 @@ impl IpfsApiClient {
 
         tracing::info!("{} keys found", result.keys.len());
         Ok(result)
+    }
+
+    /// 删除 Kubo 管理的 IPNS 密钥
+    pub async fn key_rm(&self, name: &str) -> Result<(), DaemonError> {
+        let url = self.api_url(&format!("key/rm?arg={}", encode(name)));
+        tracing::info!("Key rm: {}", name);
+
+        let response = self.client
+            .post(&url)
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!("key/rm failed: {}", body)));
+        }
+
+        tracing::info!("Key removed: {}", name);
+        Ok(())
     }
 }
 

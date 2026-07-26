@@ -433,15 +433,6 @@ function App() {
     }
   }
 
-  // ── 检查更新 ──
-  async function checkUpdates() {
-    try {
-      await invoke("plugin:updater|check");
-    } catch (e) {
-      setError(`Update check: ${formatError(e)}`);
-    }
-  }
-
   const getStatusColor = () => {
     switch (status.type) {
       case "Running": return "#4caf50";
@@ -504,9 +495,6 @@ function App() {
             <button onClick={loadStatus}>{t("refreshStatus")}</button>
             <button onClick={openWebui} disabled={!isRunning} className="btn-secondary">
               {t("openWebui")}
-            </button>
-            <button onClick={checkUpdates} className="btn-secondary">
-              {t("checkUpdates")}
             </button>
           </div>
 

@@ -1,37 +1,49 @@
-//! 密钥管理与 IPNS 模块
+//! 密钥记录管理模块
 //!
-//! 功能：
-//! - Ed25519 密钥对生成
-//! - 密钥安全存储（平台 keychain + 本地文件双保险）
-//! - IPNS 发布（通过 Kubo API）
-//! - IPNS 解析（通过 Kubo API）
+//! ## 设计说明（安全相关）
+//!
+//! 早期版本在本地用 ed25519-dalek 生成密钥对，并把 **base64 私钥明文** 写入
+//! `data_local_dir/keys/*.json`，系统 keychain 只是被忽略错误的次要副本。这既
+//! 存在私钥落盘泄露风险，又与真实 IPNS 脱节——因为 `ipns_publish` 实际使用的是
+//! Kubo 自己管理的密钥（`key/gen` 在 Kubo 密钥库中另建了一把无关的密钥），本地那
+//! 把私钥从不参与发布。
+//!
+//! 现在改为：**密钥的生成与私钥保管完全交给 Kubo**（Kubo 在自己的密钥库中管理），
+//! 本模块只维护一份「标签 → IPNS 名称」的**公开**记录，用于离线展示与快速查询。
+//! 本模块不再接触任何私钥，因此不存在私钥落盘 / 经 IPC 传给前端的问题。
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use ed25519_dalek::SigningKey;
-use rand::RngCore;
-use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// 密钥对（可序列化）
+/// 公开密钥记录（不含任何私钥，可安全落盘并传给前端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyPair {
-    /// Base64 编码的私钥（32 字节）
-    pub secret_key: String,
-    /// Base64 编码的公钥（32 字节）
+pub struct KeyRecord {
+    /// 公钥标识（IPNS 名称，等同 Kubo `key/gen` 返回的 Id）
     pub public_key: String,
-    /// IPNS 名称（公钥的 CIDv1 表示）
+    /// IPNS 名称（Kubo 返回的真实 PeerID / libp2p-key 标识，可用于 /ipns/<name>）
     pub ipns_name: String,
-    /// 人类可读的标签
+    /// 人类可读标签（同时作为 Kubo 侧的 key name）
     pub label: String,
 }
 
-/// 密钥存储管理器
+impl KeyRecord {
+    /// 由 Kubo `key/gen` / `key/list` 的 (name, id) 构造记录
+    pub fn from_kubo(name: impl Into<String>, id: impl Into<String>) -> Self {
+        let id = id.into();
+        Self {
+            public_key: id.clone(),
+            ipns_name: id,
+            label: name.into(),
+        }
+    }
+}
+
+/// 密钥记录仓库
+///
+/// 仅持久化公开记录（`KeyRecord`），不保存私钥。
 pub struct KeyManager {
-    /// 密钥文件目录
+    /// 记录文件目录
     keys_dir: PathBuf,
-    /// 平台 keychain service name
-    keychain_service: String,
 }
 
 impl Default for KeyManager {
@@ -41,119 +53,54 @@ impl Default for KeyManager {
 }
 
 impl KeyManager {
-    /// 创建密钥管理器
+    /// 创建密钥记录仓库（使用平台默认数据目录）
     pub fn new() -> Self {
         let keys_dir = dirs::data_local_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join("ipfs-desktop-rust")
             .join("keys");
+        Self::with_dir(keys_dir)
+    }
 
+    /// 使用指定目录创建（便于测试隔离，不污染真实用户目录）
+    pub fn with_dir(keys_dir: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&keys_dir);
-
-        Self {
-            keys_dir,
-            keychain_service: "ipfs-desktop-rust".to_string(),
-        }
+        Self { keys_dir }
     }
 
-    /// 生成新的 Ed25519 密钥对
-    ///
-    /// 使用操作系统随机源 OsRng，安全生成 32 字节种子。
-    pub fn generate_key(&self, label: &str) -> Result<KeyPair, String> {
-        let mut secret_bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut secret_bytes);
-        let signing_key = SigningKey::from_bytes(&secret_bytes);
-        let verifying_key = signing_key.verifying_key();
-
-        let secret_bytes = signing_key.to_bytes();
-        let public_bytes = verifying_key.to_bytes();
-
-        // IPNS 名称：公钥的 multihash → base36 编码的 CIDv1
-        let ipns_name = self.public_key_to_ipns_name(&public_bytes);
-
-        let keypair = KeyPair {
-            secret_key: STANDARD.encode(secret_bytes),
-            public_key: STANDARD.encode(public_bytes),
-            ipns_name,
-            label: label.to_string(),
-        };
-
-        // 保存到本地文件
-        self.save_to_file(&keypair)?;
-
-        // 尝试保存私钥到系统 keychain
-        #[cfg(not(test))]
-        {
-            let entry = keyring::Entry::new(
-                &self.keychain_service,
-                &format!("ipns-{}", label),
-            ).map_err(|e| format!("Keychain error: {}", e))?;
-
-            let _ = entry.set_password(&keypair.secret_key);
-        }
-
-        tracing::info!("Generated new key pair: {}", keypair.ipns_name);
-        Ok(keypair)
+    /// 保存 / 更新一条公开记录
+    pub fn save_record(&self, record: &KeyRecord) -> Result<(), String> {
+        let path = self.key_file_path(&record.label);
+        let content = serde_json::to_string_pretty(record)
+            .map_err(|e| format!("Failed to serialize key record: {}", e))?;
+        std::fs::write(&path, content)
+            .map_err(|e| format!("Failed to write key record: {}", e))?;
+        tracing::info!("Saved key record: {} ({})", record.label, record.ipns_name);
+        Ok(())
     }
 
-    /// 加载密钥（按标签）
-    pub fn load_key(&self, label: &str) -> Result<KeyPair, String> {
-        // 先尝试从文件加载
-        let file_path = self.key_file_path(label);
-        if file_path.exists() {
-            let content = std::fs::read_to_string(&file_path)
-                .map_err(|e| format!("Failed to read key file: {}", e))?;
-            let kp: KeyPair = serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse key file: {}", e))?;
-            return Ok(kp);
+    /// 按标签加载记录
+    pub fn load_record(&self, label: &str) -> Result<KeyRecord, String> {
+        let path = self.key_file_path(label);
+        if !path.exists() {
+            return Err(format!("Key '{}' not found", label));
         }
-
-        // 尝试从 keychain 恢复
-        #[cfg(not(test))]
-        {
-            let entry = keyring::Entry::new(
-                &self.keychain_service,
-                &format!("ipns-{}", label),
-            ).map_err(|e| format!("Keychain error: {}", e))?;
-
-            if let Ok(secret) = entry.get_password() {
-                // 重建密钥对
-                let secret_bytes = STANDARD.decode(&secret)
-                    .map_err(|e| format!("Failed to decode secret key: {}", e))?;
-                let secret_array: [u8; 32] = secret_bytes.try_into()
-                    .map_err(|_| "Invalid key length".to_string())?;
-                let signing_key = SigningKey::from_bytes(&secret_array);
-                let verifying_key = signing_key.verifying_key();
-
-                let public_bytes = verifying_key.to_bytes();
-                let ipns_name = self.public_key_to_ipns_name(&public_bytes);
-
-                let kp = KeyPair {
-                    secret_key: secret,
-                    public_key: STANDARD.encode(public_bytes),
-                    ipns_name,
-                    label: label.to_string(),
-                };
-
-                // 补充保存到文件
-                let _ = self.save_to_file(&kp);
-                return Ok(kp);
-            }
-        }
-
-        Err(format!("Key '{}' not found", label))
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read key record: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse key record: {}", e))
     }
 
-    /// 列出所有已保存的密钥
-    pub fn list_keys(&self) -> Result<Vec<KeyPair>, String> {
+    /// 列出所有本地记录
+    pub fn list_records(&self) -> Result<Vec<KeyRecord>, String> {
         let mut keys = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&self.keys_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "json") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Ok(kp) = serde_json::from_str::<KeyPair>(&content) {
-                            keys.push(kp);
+                        if let Ok(rec) = serde_json::from_str::<KeyRecord>(&content) {
+                            keys.push(rec);
                         }
                     }
                 }
@@ -162,121 +109,105 @@ impl KeyManager {
         Ok(keys)
     }
 
-    /// 删除密钥
-    pub fn delete_key(&self, label: &str) -> Result<(), String> {
-        let file_path = self.key_file_path(label);
-        if file_path.exists() {
-            std::fs::remove_file(&file_path)
-                .map_err(|e| format!("Failed to delete key file: {}", e))?;
-        }
-
-        // 从 keychain 删除
-        #[cfg(not(test))]
-        {
-            if let Ok(entry) = keyring::Entry::new(&self.keychain_service, &format!("ipns-{}", label)) {
-                let _ = entry.delete_password();
+    /// 用 Kubo 的权威密钥列表覆盖本地记录（保持一致）
+    pub fn sync_from_kubo(&self, records: &[KeyRecord]) {
+        // 清理已不存在于 Kubo 的本地记录
+        if let Ok(existing) = self.list_records() {
+            let live: std::collections::HashSet<&str> =
+                records.iter().map(|r| r.label.as_str()).collect();
+            for rec in existing {
+                if !live.contains(rec.label.as_str()) {
+                    let _ = std::fs::remove_file(self.key_file_path(&rec.label));
+                }
             }
         }
-
-        tracing::info!("Key '{}' deleted", label);
-        Ok(())
+        for rec in records {
+            let _ = self.save_record(rec);
+        }
     }
 
-    // ── 内部辅助 ──
+    /// 删除本地记录
+    pub fn delete_record(&self, label: &str) -> Result<(), String> {
+        let path = self.key_file_path(label);
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("Failed to delete key record: {}", e))?;
+        }
+        tracing::info!("Deleted key record: {}", label);
+        Ok(())
+    }
 
     fn key_file_path(&self, label: &str) -> PathBuf {
-        self.keys_dir.join(format!("{}.json", label))
-    }
-
-    fn save_to_file(&self, keypair: &KeyPair) -> Result<(), String> {
-        let path = self.key_file_path(&keypair.label);
-        let content = serde_json::to_string_pretty(keypair)
-            .map_err(|e| format!("Failed to serialize key: {}", e))?;
-        std::fs::write(&path, content)
-            .map_err(|e| format!("Failed to write key file: {}", e))?;
-        Ok(())
-    }
-
-    /// 公钥 → IPNS 名称
-    ///
-    /// IPNS 名称是公钥的 libp2p-key 编码 CIDv1（base36）。
-    /// 简化实现：使用 "k51" 前缀（base36 编码的 ed25519 公钥）。
-    fn public_key_to_ipns_name(&self, public_bytes: &[u8; 32]) -> String {
-        // IPNS 名称格式：k51... （base36 编码的 multihash 公钥）
-        // 简化计算：multihash = 0x00 (identity hash) + 0x20 (32 bytes) + public_key
-        let multihash: Vec<u8> = vec![0x00, 0x20]
-            .into_iter()
-            .chain(public_bytes.iter().copied())
+        // 标签用于文件名，做最小化清洗防止路径穿越
+        let safe: String = label
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
             .collect();
-
-        // IPNS 名称格式：k51... （base36 编码的 multihash 公钥）
-        // 实际 IPNS 使用 multibase + base36，这里用简化的 hex 表示
-        // 生产环境建议用 multibase/multihash 库
-        let hex_name: String = multihash.iter().map(|b| format!("{:02x}", b)).collect();
-        format!("k51{}", &hex_name[..16]) // 截断显示
+        self.keys_dir.join(format!("{}.json", safe))
     }
-}
-
-/// IPNS 发布载荷（通过 Kubo API）
-#[derive(Debug, Serialize)]
-pub struct IpnsPublishRequest {
-    /// 要发布的 CID
-    pub cid: String,
-    /// 密钥名称
-    pub key_name: String,
-    /// 生命周期（如 "24h"）
-    pub lifetime: String,
-}
-
-/// IPNS 解析结果
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IpnsResolveResult {
-    /// 解析后的 CID
-    pub path: String,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_generate_and_load_key() {
-        let mgr = KeyManager::new();
-        let kp = mgr.generate_key("test-key").unwrap();
-
-        assert_eq!(kp.label, "test-key");
-        assert!(!kp.secret_key.is_empty());
-        assert!(!kp.public_key.is_empty());
-        assert!(kp.ipns_name.starts_with("k51"));
-
-        // 加载
-        let loaded = mgr.load_key("test-key").unwrap();
-        assert_eq!(loaded.public_key, kp.public_key);
-        assert_eq!(loaded.ipns_name, kp.ipns_name);
-
-        // 清理
-        mgr.delete_key("test-key").unwrap();
+    fn temp_manager() -> KeyManager {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir()
+            .join(format!("ipfs-keyring-test-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&dir);
+        KeyManager::with_dir(dir)
     }
 
     #[test]
-    fn test_list_keys() {
-        let mgr = KeyManager::new();
-        mgr.generate_key("list-test-1").unwrap();
-        mgr.generate_key("list-test-2").unwrap();
+    fn test_save_and_load_record() {
+        let mgr = temp_manager();
+        let rec = KeyRecord::from_kubo("test-key", "k51qzi5uqu5test");
+        mgr.save_record(&rec).unwrap();
 
-        let keys = mgr.list_keys().unwrap();
-        assert!(keys.len() >= 2);
-
-        mgr.delete_key("list-test-1").unwrap();
-        mgr.delete_key("list-test-2").unwrap();
+        let loaded = mgr.load_record("test-key").unwrap();
+        assert_eq!(loaded.label, "test-key");
+        assert_eq!(loaded.ipns_name, "k51qzi5uqu5test");
+        assert_eq!(loaded.public_key, "k51qzi5uqu5test");
     }
 
     #[test]
-    fn test_delete_key() {
-        let mgr = KeyManager::new();
-        mgr.generate_key("del-test").unwrap();
-        mgr.delete_key("del-test").unwrap();
+    fn test_list_records() {
+        let mgr = temp_manager();
+        mgr.save_record(&KeyRecord::from_kubo("list-1", "k51a")).unwrap();
+        mgr.save_record(&KeyRecord::from_kubo("list-2", "k51b")).unwrap();
+        let keys = mgr.list_records().unwrap();
+        assert_eq!(keys.len(), 2);
+    }
 
-        assert!(mgr.load_key("del-test").is_err());
+    #[test]
+    fn test_delete_record() {
+        let mgr = temp_manager();
+        mgr.save_record(&KeyRecord::from_kubo("del", "k51c")).unwrap();
+        mgr.delete_record("del").unwrap();
+        assert!(mgr.load_record("del").is_err());
+    }
+
+    #[test]
+    fn test_sync_from_kubo_prunes_stale() {
+        let mgr = temp_manager();
+        mgr.save_record(&KeyRecord::from_kubo("stale", "k51old")).unwrap();
+        // Kubo 只报告 "fresh"，"stale" 应被清理
+        mgr.sync_from_kubo(&[KeyRecord::from_kubo("fresh", "k51new")]);
+        let keys = mgr.list_records().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].label, "fresh");
+    }
+
+    #[test]
+    fn test_label_sanitization() {
+        let mgr = temp_manager();
+        // 含路径分隔符的标签不应逃逸出 keys_dir
+        let rec = KeyRecord::from_kubo("../evil", "k51x");
+        mgr.save_record(&rec).unwrap();
+        // 能按原标签读回（内部做了同样的清洗）
+        assert!(mgr.load_record("../evil").is_ok());
     }
 }

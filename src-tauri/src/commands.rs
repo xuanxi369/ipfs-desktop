@@ -615,38 +615,25 @@ pub async fn get_dashboard_stats(
     let client = state.get_api_client().await
         .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
 
-    // 并行获取所有数据（失败不中断）
-    let node_id = match client.id().await {
-        Ok(id) => Some(id),
-        Err(e) => { tracing::warn!("Failed to get node id: {}", e); None }
-    };
+    // 真正并行获取所有数据（单个失败不影响其他）
+    let (node_id, version, repo, peers, bandwidth, bitswap, pin_ls) = tokio::join!(
+        client.id(),
+        client.version(),
+        client.repo_stat(),
+        client.swarm_peers(),
+        client.stats_bw(),
+        client.bitswap_stat(),
+        client.pin_ls(),
+    );
 
-    let version = match client.version().await {
-        Ok(v) => Some(v.version),
-        Err(e) => { tracing::warn!("Failed to get version: {}", e); None }
-    };
-
-    let repo = match client.repo_stat().await {
-        Ok(r) => Some(r),
-        Err(e) => { tracing::warn!("Failed to get repo stats: {}", e); None }
-    };
-
-    let peers = match client.swarm_peers().await {
-        Ok(p) => Some(p),
-        Err(e) => { tracing::warn!("Failed to get peers: {}", e); None }
-    };
-
-    let bandwidth = match client.stats_bw().await {
-        Ok(b) => Some(b),
-        Err(e) => { tracing::warn!("Failed to get bandwidth: {}", e); None }
-    };
-
-    let bitswap = match client.bitswap_stat().await {
-        Ok(b) => Some(b),
-        Err(e) => { tracing::warn!("Failed to get bitswap stats: {}", e); None }
-    };
-
-    let pin_count = match client.pin_ls().await {
+    let node_id = node_id.map_err(|e| tracing::warn!("Failed to get node id: {}", e)).ok();
+    let version = version.map(|v| v.version)
+        .map_err(|e| tracing::warn!("Failed to get version: {}", e)).ok();
+    let repo = repo.map_err(|e| tracing::warn!("Failed to get repo stats: {}", e)).ok();
+    let peers = peers.map_err(|e| tracing::warn!("Failed to get peers: {}", e)).ok();
+    let bandwidth = bandwidth.map_err(|e| tracing::warn!("Failed to get bandwidth: {}", e)).ok();
+    let bitswap = bitswap.map_err(|e| tracing::warn!("Failed to get bitswap stats: {}", e)).ok();
+    let pin_count = match pin_ls {
         Ok(pins) => pins.pins.len(),
         Err(e) => { tracing::warn!("Failed to get pin count: {}", e); 0 }
     };
@@ -681,10 +668,6 @@ pub async fn add_file_with_progress(
         .unwrap_or("unnamed")
         .to_string();
 
-    let total = tokio::fs::metadata(&path).await
-        .map(|m| m.len())
-        .unwrap_or(0);
-
     let client = state.get_api_client().await
         .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
 
@@ -692,17 +675,25 @@ pub async fn add_file_with_progress(
     let _ = app_handle.emit("upload-progress", &UploadProgress {
         name: file_name.clone(),
         loaded: 0,
-        total,
+        total: 0,
     });
 
-    let result = client.add_file(&path).await?;
-
-    // 发送完成事件
-    let _ = app_handle.emit("upload-progress", &UploadProgress {
-        name: file_name,
-        loaded: total,
-        total,
-    });
+    // 真实分块进度：回调按字节累加，节流至每 512KB 或完成时推送一次
+    let app = app_handle.clone();
+    let name_cb = file_name.clone();
+    let last_emit = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let result = client.add_file_streaming(&path, move |sent, total| {
+        use std::sync::atomic::Ordering;
+        let prev = last_emit.load(Ordering::Relaxed);
+        if sent == total || sent.saturating_sub(prev) >= 512 * 1024 {
+            last_emit.store(sent, Ordering::Relaxed);
+            let _ = app.emit("upload-progress", &UploadProgress {
+                name: name_cb.clone(),
+                loaded: sent,
+                total,
+            });
+        }
+    }).await?;
 
     tracing::info!("Upload complete: {} -> {}", file_path, result.hash);
     Ok(result)
@@ -712,46 +703,65 @@ pub async fn add_file_with_progress(
 // Phase 2: IPNS 发布/解析 + 密钥管理
 // ════════════════════════════════════════════════════════════════
 
-/// 生成新的 Ed25519 密钥对（本地 + Kubo）
+/// 生成新的 IPNS 密钥（由 Kubo 在其密钥库中生成并保管私钥）
+///
+/// 私钥全程由 Kubo 管理，本应用只保存一份「标签 → 真实 IPNS 名称」的公开记录，
+/// 不接触任何私钥。需要守护进程处于运行状态。
 #[tauri::command]
 pub async fn generate_key(
     state: State<'_, AppState>,
     label: String,
-) -> Result<crate::keyring::KeyPair, DaemonError> {
+) -> Result<crate::keyring::KeyRecord, DaemonError> {
     tracing::info!("generate_key: {}", label);
 
-    // 本地生成密钥对
-    let keypair = state.key_manager.generate_key(&label)
+    let client = state.get_api_client().await
+        .ok_or(DaemonError::ApiError("API client not initialized (start the daemon first)".to_string()))?;
+
+    // 由 Kubo 生成密钥，返回真实的 IPNS 名称（Id）
+    let kg = client.key_gen(&label).await?;
+    let record = crate::keyring::KeyRecord::from_kubo(kg.name, kg.id);
+
+    // 保存公开记录（便于离线展示）
+    state.key_manager.save_record(&record)
         .map_err(DaemonError::ConfigError)?;
 
-    // 同时在 Kubo 中注册该密钥
-    if let Some(client) = state.get_api_client().await {
-        // Kubo 的 key/gen 会用自己的密钥，这里只是告知用户
-        match client.key_gen(&label).await {
-            Ok(kg) => tracing::info!("Kubo key registered: {} -> {}", kg.name, kg.id),
-            Err(e) => tracing::warn!("Kubo key registration failed (non-fatal): {}", e),
-        }
-    }
-
-    Ok(keypair)
+    Ok(record)
 }
 
-/// 列出所有本地密钥
+/// 列出所有密钥（以 Kubo 的密钥库为权威来源，守护进程不可用时回退到本地记录）
 #[tauri::command]
 pub async fn list_keys(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::keyring::KeyPair>, DaemonError> {
-    state.key_manager.list_keys()
+) -> Result<Vec<crate::keyring::KeyRecord>, DaemonError> {
+    // 优先查询 Kubo 的权威列表并同步本地记录
+    if let Some(client) = state.get_api_client().await {
+        if let Ok(kl) = client.key_list().await {
+            let records: Vec<crate::keyring::KeyRecord> = kl.keys.into_iter()
+                .map(|k| crate::keyring::KeyRecord::from_kubo(k.name, k.id))
+                .collect();
+            state.key_manager.sync_from_kubo(&records);
+            return Ok(records);
+        }
+    }
+
+    // 守护进程不可用 → 回退到本地记录
+    state.key_manager.list_records()
         .map_err(DaemonError::ConfigError)
 }
 
-/// 删除密钥
+/// 删除密钥（同时从 Kubo 密钥库和本地记录移除）
 #[tauri::command]
 pub async fn delete_key(
     state: State<'_, AppState>,
     label: String,
 ) -> Result<(), DaemonError> {
-    state.key_manager.delete_key(&label)
+    // 先删 Kubo 侧（"self" 等内置密钥可能失败，记录但不阻断本地清理）
+    if let Some(client) = state.get_api_client().await {
+        if let Err(e) = client.key_rm(&label).await {
+            tracing::warn!("Kubo key/rm failed for '{}': {}", label, e);
+        }
+    }
+    state.key_manager.delete_record(&label)
         .map_err(DaemonError::ConfigError)
 }
 

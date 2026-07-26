@@ -452,9 +452,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_key_manager_present() {
-        let state = AppState::new(AppConfig::default());
-        let kp = state.key_manager.generate_key("state-test").unwrap();
-        assert!(!kp.public_key.is_empty());
-        state.key_manager.delete_key("state-test").unwrap();
+        // 使用临时目录，避免污染真实用户密钥目录
+        let dir = std::env::temp_dir()
+            .join(format!("ipfs-state-keytest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mgr = crate::keyring::KeyManager::with_dir(dir);
+        let rec = crate::keyring::KeyRecord::from_kubo("state-test", "k51state");
+        mgr.save_record(&rec).unwrap();
+        assert!(!mgr.load_record("state-test").unwrap().public_key.is_empty());
+        mgr.delete_record("state-test").unwrap();
     }
 }
