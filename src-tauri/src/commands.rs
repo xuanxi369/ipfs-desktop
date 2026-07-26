@@ -1090,7 +1090,3 @@ pub async fn get_backend_capabilities(
     };
     Ok(serde_json::to_value(caps).unwrap_or_default())
 }
-
-    );
-    Ok(bench.run_all().await)
-}
