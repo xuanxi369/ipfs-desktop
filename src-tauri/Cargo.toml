@@ -22,7 +22,7 @@ tokio = { version = "1", features = ["full"] }
 
 [dependencies]
 # Tauri 核心
-tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"

@@ -94,7 +94,7 @@ impl MicroBenchmark {
     ) -> BenchOpResult
     where
         F: Fn() -> Fut,
-        Fut: std::future::Future<Output -> Result<(), String>>,
+        Fut: std::future::Future<Output = Result<(), String>>,
     {
         let mut latencies = Vec::with_capacity(self.iterations as usize);
 
@@ -161,8 +161,8 @@ impl MicroBenchmark {
     where
         Fk: Fn() -> FutK,
         Fi: Fn() -> FutI,
-        FutK: std::future::Future<Output -> Result<(), String>>,
-        FutI: std::future::Future<Output -> Result<(), String>>,
+        FutK: std::future::Future<Output = Result<(), String>>,
+        FutI: std::future::Future<Output = Result<(), String>>,
     {
         let kubos = self.bench_op(name, BackendType::Kubo, f_kubo);
         let irohs = self.bench_op(name, BackendType::Iroh, f_iroh);
