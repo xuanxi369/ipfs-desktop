@@ -6,7 +6,7 @@
 //! - IPNS 发布（通过 Kubo API）
 //! - IPNS 解析（通过 Kubo API）
 
-use base64ct::{Base64, Encoding};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -63,8 +63,8 @@ impl KeyManager {
         let ipns_name = self.public_key_to_ipns_name(&public_bytes);
 
         let keypair = KeyPair {
-            secret_key: Base64::encode_string(&secret_bytes),
-            public_key: Base64::encode_string(&public_bytes),
+            secret_key: STANDARD.encode(&secret_bytes),
+            public_key: STANDARD.encode(&public_bytes),
             ipns_name,
             label: label.to_string(),
         };
@@ -109,7 +109,7 @@ impl KeyManager {
 
             if let Ok(secret) = entry.get_password() {
                 // 重建密钥对
-                let secret_bytes = Base64::decode_vec(&secret)
+                let secret_bytes = STANDARD.decode(&secret)
                     .map_err(|e| format!("Failed to decode secret key: {}", e))?;
                 let secret_array: [u8; 32] = secret_bytes.try_into()
                     .map_err(|_| "Invalid key length".to_string())?;
@@ -121,7 +121,7 @@ impl KeyManager {
 
                 let kp = KeyPair {
                     secret_key: secret,
-                    public_key: Base64::encode_string(&public_bytes),
+                    public_key: STANDARD.encode(&public_bytes),
                     ipns_name,
                     label: label.to_string(),
                 };
@@ -200,7 +200,7 @@ impl KeyManager {
             .chain(public_bytes.iter().copied())
             .collect();
 
-        // 简单 base36 编码（使用 base64ct 库先转 base64，再手动映射到 base36 太复杂）
+        // IPNS 名称格式：k51... （base36 编码的 multihash 公钥）
         // 实际 IPNS 使用 multibase + base36，这里用简化的 hex 表示
         // 生产环境建议用 multibase/multihash 库
         let hex_name: String = multihash.iter().map(|b| format!("{:02x}", b)).collect();

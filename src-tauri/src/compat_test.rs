@@ -91,7 +91,7 @@ impl CompatTester {
         f: F,
     ) where
         F: FnOnce(&KuboBackend, &IrohBackend) -> Fut,
-        Fut: std::future::Future<Output -> Result<(String, String), String>>,
+        Fut: std::future::Future<Output = Result<(String, String), String>>,
     {
         let started = Instant::now();
 
