@@ -394,7 +394,7 @@ pub async fn set_auto_launch(
     let auto = auto_launch::AutoLaunchBuilder::new()
         .set_app_name(app_name)
         .set_app_path(&app_path.to_string_lossy())
-        .set_macos_launch_mode(auto_launch::MacosLaunchMode::Agent)
+        .set_macos_launch_mode(auto_launch::MacOSLaunchMode::Agent)
         .build()
         .map_err(|e| DaemonError::ConfigError(format!("Failed to build auto-launch: {}", e)))?;
 
