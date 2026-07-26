@@ -1,14 +1,16 @@
 use tauri::State;
+use tauri::Emitter;
 use crate::state::AppState;
 use crate::config::AppConfig;
 use crate::types::DaemonStatus;
 use crate::daemon::{
     BinaryFinder, DaemonController,
-    PinList, PinEntry, PinAddResult, PinRmResult,
+    PinList, PinAddResult, PinRmResult,
     BandwidthStats, BitswapStats, NodeId, RepoStats, SwarmPeers,
     IpfsApiClient,
 };
 use crate::error::DaemonError;
+use crate::backend_trait::Backend;
 use serde::Serialize;
 
 /// 获取守护进程状态
@@ -1089,6 +1091,8 @@ pub async fn get_backend_capabilities(
     Ok(serde_json::to_value(caps).unwrap_or_default())
 }
 
+// Phase 4 测试模块暂时禁用（compat_test/benchmark 编译未就绪）
+#[cfg(not(any()))]
 /// 运行兼容性测试
 #[tauri::command]
 pub async fn run_compat_test(
@@ -1103,6 +1107,7 @@ pub async fn run_compat_test(
     Ok(tester.run_all().await)
 }
 
+#[cfg(not(any()))]
 /// 运行性能基准测试
 #[tauri::command]
 pub async fn run_benchmark(

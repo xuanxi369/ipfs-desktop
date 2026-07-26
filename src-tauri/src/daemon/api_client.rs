@@ -211,7 +211,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -241,7 +241,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -271,7 +271,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -301,7 +301,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -345,7 +345,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -422,7 +422,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -455,7 +455,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -483,7 +483,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -519,7 +519,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -562,7 +562,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -601,7 +601,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -634,7 +634,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -671,7 +671,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -701,7 +701,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -731,7 +731,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -757,7 +757,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -795,7 +795,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -821,7 +821,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -847,7 +847,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -873,7 +873,7 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
                 addr: self.api_addr.clone(),
-                source: e.to_string(),
+                detail: e.to_string(),
             })?;
 
         if !response.status().is_success() {
@@ -916,7 +916,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
-            DaemonError::ApiConnectionFailed { addr, source: _ } => {
+            DaemonError::ApiConnectionFailed { addr, detail: _ } => {
                 assert!(addr.contains("59999"));
             }
             _ => panic!("Expected ApiConnectionFailed, got {:?}", err),

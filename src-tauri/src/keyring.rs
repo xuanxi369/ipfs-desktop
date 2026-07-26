@@ -7,7 +7,8 @@
 //! - IPNS 解析（通过 Kubo API）
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::SigningKey;
+use rand::RngCore;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -53,7 +54,9 @@ impl KeyManager {
     ///
     /// 使用操作系统随机源 OsRng，安全生成 32 字节种子。
     pub fn generate_key(&self, label: &str) -> Result<KeyPair, String> {
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let mut secret_bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut secret_bytes);
+        let signing_key = SigningKey::from_bytes(&secret_bytes.into());
         let verifying_key = signing_key.verifying_key();
 
         let secret_bytes = signing_key.to_bytes();

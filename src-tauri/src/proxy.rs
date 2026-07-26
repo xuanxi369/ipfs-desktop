@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock, Notify};
 use std::time::{Duration, Instant};
+use serde::Serialize;
 use crate::daemon::IpfsApiClient;
 use crate::cache::CacheStore;
 
@@ -129,26 +130,13 @@ impl BatchProcessor {
         }
     }
 
-    /// 提交一个请求到批处理队列
-    async fn submit<T, F, Fut>(&self, key: BatchKey, executor: F) -> Result<T, String>
+    /// 提交一个请求到批处理队列（当前为直接执行模式）
+    async fn submit<T, F, Fut>(&self, _key: BatchKey, executor: F) -> Result<T, String>
     where
         T: Clone + Send + 'static,
         F: FnOnce() -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T, String>> + Send,
     {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        // 将执行函数和回调打包
-        let work: Box<dyn FnOnce() + Send> = Box::new(move || {
-            // 这里是同步包装，实际执行在 spawn 中
-            let _ = tx; // 由调用方处理
-        });
-
-        // 简化实现：直接执行，不做真正的批处理（完整版需要更复杂的状态机）
-        // Phase 3 MVP 使用直接执行 + 结果缓存
-        drop(work);
-        drop(rx);
-
         executor().await
     }
 }
@@ -236,7 +224,7 @@ pub struct ProxyClient {
 }
 
 /// 代理统计
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProxyStats {
     pub total_requests: u64,
     pub cache_hits: u64,

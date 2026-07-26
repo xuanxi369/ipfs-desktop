@@ -60,10 +60,10 @@ impl DaemonController {
         // ── 启动 stdout/stderr 后台日志采集 ──
         // 持续读取管道防止缓冲区满导致进程阻塞
         if let Some(stdout) = child.stdout.take() {
-            tokio::spawn(Self::pipe_reader(stdout, "ipfs-stdout"));
+            Self::pipe_reader(stdout, "ipfs-stdout");
         }
         if let Some(stderr) = child.stderr.take() {
-            tokio::spawn(Self::pipe_reader(stderr, "ipfs-stderr"));
+            Self::pipe_reader(stderr, "ipfs-stderr");
         }
 
         *self.process.lock().await = Some(child);
@@ -91,22 +91,21 @@ impl DaemonController {
     /// 当管道关闭（进程退出）时自动结束。
     fn pipe_reader(pipe: impl std::io::Read + Send + 'static, label: &'static str) {
         use std::io::{BufRead, BufReader};
-        let label = label.to_string();
         tokio::task::spawn_blocking(move || {
             let reader = BufReader::new(pipe);
             for line in reader.lines() {
                 match line {
                     Ok(text) if !text.is_empty() => {
-                        tracing::info!(target: &label, "{}", text);
+                        tracing::info!("[{label}] {text}");
                     }
                     Err(e) => {
-                        tracing::warn!(target: &label, "Pipe read error: {}", e);
+                        tracing::warn!("[{label}] Pipe read error: {e}");
                         break;
                     }
                     _ => {}
                 }
             }
-            tracing::info!(target: &label, "Pipe closed (process exited)");
+            tracing::info!("[{label}] Pipe closed (process exited)");
         });
     }
 
@@ -119,9 +118,7 @@ impl DaemonController {
 
         tracing::info!("Stopping IPFS daemon...");
 
-        // take() 取出子进程，process_guard 变为 None
         if let Some(mut child) = process_guard.take() {
-            // 释放锁，后续直接操作 child 变量
             drop(process_guard);
 
             #[cfg(unix)]
@@ -129,45 +126,37 @@ impl DaemonController {
                 use nix::sys::signal::{kill, Signal};
                 use nix::unistd::Pid;
 
-                if let Some(pid) = child.id() {
-                    let pid = Pid::from_raw(pid as i32);
-                    match kill(pid, Signal::SIGTERM) {
-                        Ok(_) => {
-                            tracing::info!("Sent SIGTERM to daemon process (PID: {})", pid);
-                            // 轮询等待进程退出（最多 5 秒）
-                            for i in 0..10 {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                                match child.try_wait() {
-                                    Ok(Some(status)) => {
-                                        tracing::info!("Daemon process exited gracefully: {:?}", status);
-                                        // 确保后续 wait() 调用不会阻塞
-                                        let _ = child.wait();
-                                        // 重新获取锁清理
-                                        let mut guard = self.process.lock().await;
-                                        *guard = None;
-                                        return Ok(());
-                                    }
-                                    Ok(None) => {
-                                        // 进程仍在运行，继续等待
-                                        tracing::debug!("Waiting for daemon to exit... ({}/10)", i + 1);
-                                        continue;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Error checking process during shutdown: {}", e);
-                                        // try_wait 失败时不中断，继续重试
-                                        continue;
-                                    }
+                let pid = child.id();
+                let nix_pid = Pid::from_raw(pid as i32);
+                match kill(nix_pid, Signal::SIGTERM) {
+                    Ok(_) => {
+                        tracing::info!("Sent SIGTERM to daemon (PID: {})", pid);
+                        for i in 0..10 {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            match child.try_wait() {
+                                Ok(Some(status)) => {
+                                    tracing::info!("Daemon exited gracefully: {:?}", status);
+                                    let _ = child.wait();
+                                    let mut guard = self.process.lock().await;
+                                    *guard = None;
+                                    return Ok(());
+                                }
+                                Ok(None) => {
+                                    tracing::debug!("Waiting for daemon... ({}/10)", i + 1);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    tracing::warn!("try_wait error: {}", e);
+                                    continue;
                                 }
                             }
-                            // 超时 → SIGKILL
-                            tracing::warn!("Daemon did not stop gracefully after 5s, sending SIGKILL");
-                            let _ = kill(pid, Signal::SIGKILL);
                         }
-                        Err(e) => {
-                            tracing::error!("Failed to send SIGTERM: {}", e);
-                            // SIGTERM 发送失败时仍尝试 SIGKILL
-                            let _ = kill(pid, Signal::SIGKILL);
-                        }
+                        tracing::warn!("Daemon not stopping, sending SIGKILL");
+                        let _ = kill(nix_pid, Signal::SIGKILL);
+                    }
+                    Err(e) => {
+                        tracing::error!("SIGTERM failed: {}, sending SIGKILL", e);
+                        let _ = kill(nix_pid, Signal::SIGKILL);
                     }
                 }
             }
@@ -175,19 +164,17 @@ impl DaemonController {
             #[cfg(windows)]
             {
                 match child.kill() {
-                    Ok(_) => tracing::info!("Killed daemon process on Windows"),
+                    Ok(_) => tracing::info!("Killed daemon on Windows"),
                     Err(e) => tracing::error!("Failed to kill daemon on Windows: {}", e),
                 }
             }
 
-            // 等待进程最终退出（回收僵尸）
             match child.wait() {
-                Ok(status) => tracing::info!("Daemon process exited: {:?}", status),
-                Err(e) => tracing::warn!("Error waiting for daemon process: {}", e),
+                Ok(status) => tracing::info!("Daemon exited: {:?}", status),
+                Err(e) => tracing::warn!("Error waiting for daemon: {}", e),
             }
         }
 
-        // 确保 process_guard 被清空
         let mut guard = self.process.lock().await;
         *guard = None;
         tracing::info!("IPFS daemon stopped");
@@ -244,7 +231,7 @@ impl DaemonController {
     /// 获取进程 ID
     pub async fn get_pid(&self) -> Option<u32> {
         let process_guard = self.process.lock().await;
-        process_guard.as_ref().and_then(|child| child.id())
+        process_guard.as_ref().and_then(|child| Some(child.id()))
     }
 }
 

@@ -123,7 +123,7 @@ impl OfflineQueue {
              FROM offline_queue ORDER BY created_at ASC LIMIT 1"
         ).map_err(|e| e.to_string())?;
 
-        let result = stmt.query_row([], |row| {
+        let result: Option<QueueEntry> = stmt.query_row([], |row| {
             let id: i64 = row.get(0)?;
             let json: String = row.get(1)?;
             let created_at: i64 = row.get(2)?;
@@ -140,7 +140,7 @@ impl OfflineQueue {
         }).optional()
           .map_err(|e| e.to_string())?;
 
-        Ok(result.flatten())
+        Ok(result.map_err(|e| e.to_string())?)
     }
 
     /// 标记条目为已完成（从队列移除）

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
+use tauri::Emitter;
 use crate::config::AppConfig;
 use crate::types::DaemonStatus;
 use crate::daemon::{DaemonController, IpfsApiClient};
@@ -9,7 +10,7 @@ use crate::keyring::KeyManager;
 use crate::proxy::ProxyClient;
 use crate::offline_queue::{OfflineQueue, ReplayEngine};
 use crate::bandwidth::{BandwidthConfig, BandwidthMonitor, KuboConfigManager};
-use crate::backend_trait::{Backend, BackendType};
+use crate::backend_trait::BackendType;
 use crate::kubo_adapter::KuboBackend;
 use crate::iroh_adapter::IrohBackend;
 

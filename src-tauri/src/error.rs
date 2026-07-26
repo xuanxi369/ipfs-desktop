@@ -38,10 +38,10 @@ pub enum DaemonError {
     ApiError(String),
 
     /// API 连接失败
-    #[error("Failed to connect to IPFS API at {addr}: {source}")]
+    #[error("Failed to connect to IPFS API at {addr}: {detail}")]
     ApiConnectionFailed {
         addr: String,
-        source: String,
+        detail: String,
     },
 
     /// API 响应解析失败
