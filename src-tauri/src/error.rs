@@ -99,7 +99,7 @@ mod tests {
     fn test_error_api_connection() {
         let err = DaemonError::ApiConnectionFailed {
             addr: "http://127.0.0.1:5001".to_string(),
-            source: "connection refused".to_string(),
+            detail: "connection refused".to_string(),
         };
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("127.0.0.1"));
