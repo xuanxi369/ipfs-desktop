@@ -256,6 +256,11 @@ ipfs-desktop-rust/
 
 ---
 
+
+<a href="https://github.com/xuanxi369/IPFS-Desktop-Rust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust" />
+</a>
+
 ## License
 
 MIT
