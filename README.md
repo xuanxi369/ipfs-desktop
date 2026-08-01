@@ -258,7 +258,7 @@ ipfs-desktop-rust/
 
 ---
 
-## 贡献者--以至即将到来的WEB3革命，以至人类崇高无上的自由意志
+## 贡献者--至WEB3领域，对于践行去中心化的伟大事业的先驱者以及对人类的自由意志致以最崇高的敬意
 <a href="https://github.com/xuanxi369/IPFS-Desktop-Rust/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust" />
 </a>
