@@ -258,7 +258,7 @@ ipfs-desktop-rust/
 
 ---
 
-## 向贡献者与‘去中心化’的先驱者致敬，向人类的自由意志致敬
+## Contributors - - 向贡献者与‘去中心化’的先驱者致敬，向人类的自由意志致敬
 
 <a href="https://github.com/xuanxi369/IPFS-Desktop-Rust/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust" />
