@@ -23,14 +23,14 @@
 //!   确定性行为，并把这一限制显式写在类型与测试里。
 //! - 默认策略为 `KuboOnly`，即在路由层被显式启用前，行为与现有单栈完全一致（零回归）。
 
+use crate::backend_trait::{AddOutput, Backend, BackendError, BackendType};
+use crate::iroh_adapter::IrohBackend;
+use crate::kubo_adapter::KuboBackend;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crate::backend_trait::{Backend, BackendType, BackendError, AddOutput};
-use crate::kubo_adapter::KuboBackend;
-use crate::iroh_adapter::IrohBackend;
 
 /// 从 JSON 文件载入一个 `String -> V` 映射（文件不存在/损坏时返回空表）
 fn load_json_map<V: DeserializeOwned>(path: &Option<PathBuf>) -> HashMap<String, V> {
@@ -102,10 +102,15 @@ pub struct BackendRouter {
 impl BackendRouter {
     /// `data_dir` 为空时来源标记 / provider 仅存内存（测试用）；
     /// 否则分别持久化到 `<data_dir>/cid_origins.json` 与 `<data_dir>/cid_providers.json`。
-    pub fn new(
+    pub fn new(kubo: Arc<KuboBackend>, iroh: Arc<IrohBackend>, data_dir: Option<PathBuf>) -> Self {
+        Self::new_with_policy(kubo, iroh, data_dir, RoutePolicy::KuboOnly)
+    }
+
+    pub fn new_with_policy(
         kubo: Arc<KuboBackend>,
         iroh: Arc<IrohBackend>,
         data_dir: Option<PathBuf>,
+        initial_policy: RoutePolicy,
     ) -> Self {
         let origins_path = data_dir.as_ref().map(|d| d.join("cid_origins.json"));
         let providers_path = data_dir.as_ref().map(|d| d.join("cid_providers.json"));
@@ -118,7 +123,7 @@ impl BackendRouter {
             kubo,
             iroh,
             // 默认 KuboOnly：在被显式切换前，路由层不改变任何现有行为
-            policy: Arc::new(RwLock::new(RoutePolicy::KuboOnly)),
+            policy: Arc::new(RwLock::new(initial_policy)),
             origins: Arc::new(RwLock::new(origins)),
             origins_path,
             providers: Arc::new(RwLock::new(providers)),
@@ -172,6 +177,13 @@ impl BackendRouter {
         persist_json_map(&self.providers_path, &snapshot);
     }
 
+    /// 删除失效或不再信任的 provider ticket。
+    pub async fn forget_provider(&self, cid: &str) {
+        self.providers.write().await.remove(cid.trim());
+        let snapshot = self.providers.read().await.clone();
+        persist_json_map(&self.providers_path, &snapshot);
+    }
+
     /// 查询已知 provider ticket
     pub async fn known_provider(&self, cid: &str) -> Option<String> {
         self.providers.read().await.get(cid.trim()).cloned()
@@ -192,7 +204,11 @@ impl BackendRouter {
                 tracing::info!("cat network-fallback hit via provider for {}", cid);
                 Some(Ok(bytes))
             }
-            Err(e) => Some(Err(e)),
+            Err(e) => {
+                // ticket 失效时不无限重试，也避免长期保存过期访问凭证。
+                self.forget_provider(cid).await;
+                Some(Err(e))
+            }
         }
     }
 
@@ -338,7 +354,9 @@ mod tests {
         );
         // CIDv1 (dag-pb / raw)
         assert_eq!(
-            BackendRouter::classify_cid("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"),
+            BackendRouter::classify_cid(
+                "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+            ),
             BackendType::Kubo
         );
         assert_eq!(
@@ -378,7 +396,8 @@ mod tests {
         r.set_policy(RoutePolicy::Auto).await;
 
         // 一个「看起来像 IPFS」的 cid，但被标记为 iroh 产生 → 来源标记胜出
-        r.record_origin("QmLooksLikeIpfsButIroh", BackendType::Iroh).await;
+        r.record_origin("QmLooksLikeIpfsButIroh", BackendType::Iroh)
+            .await;
         assert_eq!(
             r.choose_for_cid("QmLooksLikeIpfsButIroh").await,
             BackendType::Iroh,
@@ -407,7 +426,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let kubo = Arc::new(KuboBackend::new("http://127.0.0.1:5001".to_string()));
-        let iroh = Arc::new(IrohBackend::new(std::env::temp_dir().join("router-persist-iroh")));
+        let iroh = Arc::new(IrohBackend::new(
+            std::env::temp_dir().join("router-persist-iroh"),
+        ));
 
         {
             let r = BackendRouter::new(kubo.clone(), iroh.clone(), Some(dir.clone()));
@@ -417,7 +438,10 @@ mod tests {
         // 新实例从磁盘恢复来源标记 + provider
         let r2 = BackendRouter::new(kubo, iroh, Some(dir.clone()));
         assert_eq!(r2.known_origin("cidX").await, Some(BackendType::Iroh));
-        assert_eq!(r2.known_provider("cidX").await, Some("ticket-abc".to_string()));
+        assert_eq!(
+            r2.known_provider("cidX").await,
+            Some("ticket-abc".to_string())
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -434,7 +458,10 @@ mod tests {
     async fn test_add_prefer_overrides_policy() {
         let r = router();
         // 默认 KuboOnly，但显式偏好 iroh 应被尊重
-        assert_eq!(r.choose_for_add(Some(BackendType::Iroh)).await, BackendType::Iroh);
+        assert_eq!(
+            r.choose_for_add(Some(BackendType::Iroh)).await,
+            BackendType::Iroh
+        );
     }
 
     /// Phase C 内容发现：无来源标记时，Auto 靠「iroh 本地确有该 blob」路由到 iroh
@@ -455,7 +482,10 @@ mod tests {
         let out = iroh.add_file(&tmp).await.expect("iroh add");
 
         // 无来源标记，但 iroh 本地确有 → 靠内容发现路由到 Iroh
-        assert!(r.known_origin(&out.cid).await.is_none(), "no origin tag expected");
+        assert!(
+            r.known_origin(&out.cid).await.is_none(),
+            "no origin tag expected"
+        );
         assert_eq!(
             r.choose_for_cid(&out.cid).await,
             BackendType::Iroh,
@@ -463,7 +493,10 @@ mod tests {
         );
 
         // iroh 本地没有的 IPFS CID → 探测 miss → 兜底启发式走 Kubo
-        assert_eq!(r.choose_for_cid("QmSomethingNotLocalXYZ").await, BackendType::Kubo);
+        assert_eq!(
+            r.choose_for_cid("QmSomethingNotLocalXYZ").await,
+            BackendType::Kubo
+        );
 
         let _ = tokio::fs::remove_file(&tmp).await;
     }
@@ -528,13 +561,11 @@ mod tests {
         r.record_provider(&added.cid, &ticket).await;
 
         // cat：本地 kubo(死端口) + iroh_b(无) 都 miss → 网络 fallback 从 A 取回
-        let (used, bytes) = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            r.cat(&added.cid),
-        )
-        .await
-        .expect("network fallback timed out")
-        .expect("network fallback should succeed");
+        let (used, bytes) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), r.cat(&added.cid))
+                .await
+                .expect("network fallback timed out")
+                .expect("network fallback should succeed");
 
         assert_eq!(used, BackendType::Iroh);
         assert_eq!(bytes, payload, "content fetched cross-node must match");

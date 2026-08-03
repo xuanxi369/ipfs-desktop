@@ -3,14 +3,12 @@
 //! 将现有的 IpfsApiClient (HTTP → Go Kubo) 包装为 Backend trait 实现。
 //! 这是当前默认后端，保持 100% 向后兼容。
 
-use async_trait::async_trait;
-use crate::daemon::IpfsApiClient;
 use crate::backend_trait::{
-    Backend, BackendType, BackendCapabilities, BackendError,
-    NodeInfo, RepoInfo, PeerInfo as BPeerInfo,
-    AddOutput, PinEntry as BPinEntry,
-    BandwidthInfo, BitswapInfo, IpnsOutput, IpnsPath,
+    AddOutput, Backend, BackendCapabilities, BackendError, BackendType, BandwidthInfo, BitswapInfo,
+    IpnsOutput, IpnsPath, NodeInfo, PeerInfo as BPeerInfo, PinEntry as BPinEntry, RepoInfo,
 };
+use crate::daemon::IpfsApiClient;
+use async_trait::async_trait;
 use std::path::Path;
 
 /// Kubo HTTP API 后端适配器
@@ -29,9 +27,7 @@ impl KuboBackend {
     /// 从错误类型转换
     fn map_err(&self, e: crate::error::DaemonError) -> BackendError {
         match &e {
-            crate::error::DaemonError::BinaryNotFound => {
-                BackendError::unavailable(e.to_string())
-            }
+            crate::error::DaemonError::BinaryNotFound => BackendError::unavailable(e.to_string()),
             crate::error::DaemonError::ApiConnectionFailed { .. } => {
                 BackendError::network(e.to_string())
             }
@@ -97,7 +93,11 @@ impl Backend for KuboBackend {
     }
 
     async fn add_file(&self, path: &Path) -> Result<AddOutput, BackendError> {
-        let result = self.client.add_file(path).await.map_err(|e| self.map_err(e))?;
+        let result = self
+            .client
+            .add_file(path)
+            .await
+            .map_err(|e| self.map_err(e))?;
         Ok(AddOutput {
             cid: result.hash,
             size: result.size.parse().unwrap_or(0),
@@ -110,19 +110,29 @@ impl Backend for KuboBackend {
     }
 
     async fn file_size(&self, cid: &str) -> Result<u64, BackendError> {
-        self.client.file_size(cid).await.map_err(|e| self.map_err(e))
+        self.client
+            .file_size(cid)
+            .await
+            .map_err(|e| self.map_err(e))
     }
 
     async fn pin_ls(&self) -> Result<Vec<BPinEntry>, BackendError> {
         let list = self.client.pin_ls().await.map_err(|e| self.map_err(e))?;
-        Ok(list.pins.into_iter().map(|p| BPinEntry {
-            cid: p.cid,
-            pin_type: p.pin_type,
-        }).collect())
+        Ok(list
+            .pins
+            .into_iter()
+            .map(|p| BPinEntry {
+                cid: p.cid,
+                pin_type: p.pin_type,
+            })
+            .collect())
     }
 
     async fn pin_add(&self, cid: &str) -> Result<(), BackendError> {
-        self.client.pin_add(cid).await.map_err(|e| self.map_err(e))?;
+        self.client
+            .pin_add(cid)
+            .await
+            .map_err(|e| self.map_err(e))?;
         Ok(())
     }
 
@@ -132,12 +142,20 @@ impl Backend for KuboBackend {
     }
 
     async fn swarm_peers(&self) -> Result<Vec<BPeerInfo>, BackendError> {
-        let peers = self.client.swarm_peers().await.map_err(|e| self.map_err(e))?;
-        Ok(peers.peers.into_iter().map(|p| BPeerInfo {
-            peer_id: p.peer,
-            address: p.addr,
-            direction: None,
-        }).collect())
+        let peers = self
+            .client
+            .swarm_peers()
+            .await
+            .map_err(|e| self.map_err(e))?;
+        Ok(peers
+            .peers
+            .into_iter()
+            .map(|p| BPeerInfo {
+                peer_id: p.peer,
+                address: p.addr,
+                direction: None,
+            })
+            .collect())
     }
 
     async fn bandwidth_stats(&self) -> Result<BandwidthInfo, BackendError> {
@@ -151,7 +169,11 @@ impl Backend for KuboBackend {
     }
 
     async fn bitswap_stats(&self) -> Result<BitswapInfo, BackendError> {
-        let bs = self.client.bitswap_stat().await.map_err(|e| self.map_err(e))?;
+        let bs = self
+            .client
+            .bitswap_stat()
+            .await
+            .map_err(|e| self.map_err(e))?;
         Ok(BitswapInfo {
             blocks_received: bs.blocks_received,
             blocks_sent: bs.blocks_sent,
@@ -161,16 +183,28 @@ impl Backend for KuboBackend {
     }
 
     async fn name_publish(
-        &self, cid: &str, key_name: &str, lifetime: &str,
+        &self,
+        cid: &str,
+        key_name: &str,
+        lifetime: &str,
     ) -> Result<IpnsOutput, BackendError> {
-        let result = self.client.name_publish(cid, key_name, lifetime)
-            .await.map_err(|e| self.map_err(e))?;
-        Ok(IpnsOutput { name: result.name, value: result.value })
+        let result = self
+            .client
+            .name_publish(cid, key_name, lifetime)
+            .await
+            .map_err(|e| self.map_err(e))?;
+        Ok(IpnsOutput {
+            name: result.name,
+            value: result.value,
+        })
     }
 
     async fn name_resolve(&self, name: &str) -> Result<IpnsPath, BackendError> {
-        let result = self.client.name_resolve(name)
-            .await.map_err(|e| self.map_err(e))?;
+        let result = self
+            .client
+            .name_resolve(name)
+            .await
+            .map_err(|e| self.map_err(e))?;
         Ok(IpnsPath { path: result.path })
     }
 

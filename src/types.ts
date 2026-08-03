@@ -22,6 +22,9 @@ export interface AppConfig {
   daemon_flags: string[];
   auto_launch: boolean;
   auto_gc: boolean;
+  auto_restart: boolean;
+  route_policy: "KuboOnly" | "IrohOnly" | "Auto";
+  kubo_binary_sha256: string | null;
 }
 
 export interface AddResult {
@@ -29,6 +32,7 @@ export interface AddResult {
   Size: string;
   Name: string;
 }
+export interface ContentRecord { cid: string; name: string; size: number; backend: string; added_at: number; }
 
 export interface StructuredError {
   BinaryNotFound?: null;
@@ -38,7 +42,7 @@ export interface StructuredError {
   ProcessStopFailed?: string;
   InvalidState?: null;
   ApiError?: string;
-  ApiConnectionFailed?: { addr: string; source: string };
+  ApiConnectionFailed?: { addr: string; detail: string };
   ApiParseError?: string;
   ConfigError?: string;
   IoError?: string;
@@ -118,7 +122,7 @@ export function formatError(e: unknown): string {
     if (err.ProcessStopFailed) return `Process stop failed: ${err.ProcessStopFailed}`;
     if (err.InvalidState !== undefined) return "Invalid daemon state for this operation.";
     if (err.ApiError) return `API error: ${err.ApiError}`;
-    if (err.ApiConnectionFailed) return `API connection failed at ${err.ApiConnectionFailed.addr}: ${err.ApiConnectionFailed.source}`;
+    if (err.ApiConnectionFailed) return `API connection failed at ${err.ApiConnectionFailed.addr}: ${err.ApiConnectionFailed.detail}`;
     if (err.ApiParseError) return `API parse error: ${err.ApiParseError}`;
     if (err.ConfigError) return `Configuration error: ${err.ConfigError}`;
     if (err.IoError) return `I/O error: ${err.IoError}`;
@@ -149,4 +153,9 @@ export function formatUptime(secs: number): string {
   if (h) parts.push(`${h}h`);
   parts.push(`${m}m`);
   return parts.join(" ");
+}
+
+export function shortHash(value: string, size = 12): string {
+  if (value.length <= size * 2 + 1) return value;
+  return `${value.slice(0, size)}…${value.slice(-size)}`;
 }

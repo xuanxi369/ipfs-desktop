@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { Icon } from "./Icons";
 import {
   DaemonStatus, AppConfig, DashboardStats, NodeIdentityInfo, NodeHealth,
   formatError, formatBytes, formatRate, formatUptime,
@@ -77,7 +78,7 @@ export default function Dashboard({
     <>
       {/* ── Phase D1: 节点身份卡 ── */}
       <div className="status-card">
-        <h2>🪪 {t("nodeIdentity")}</h2>
+        <h2><Icon name="identity"/> {t("nodeIdentity")}</h2>
         {identity ? (
           <div className="status-details">
             <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px", flexWrap: "wrap" }}>
@@ -86,20 +87,20 @@ export default function Dashboard({
                   <input className="cid-input small-input" value={labelDraft}
                     placeholder={t("nodeLabel")}
                     onChange={(e) => setLabelDraft(e.target.value)} />
-                  <button className="btn-small btn-download" onClick={saveLabel} disabled={!labelDraft.trim()}>💾 {t("save")}</button>
-                  <button className="btn-small" onClick={() => setEditingLabel(false)}>✕</button>
+                  <button className="btn-small btn-download" onClick={saveLabel} disabled={!labelDraft.trim()}><Icon name="save"/> {t("save")}</button>
+                  <button className="btn-small" onClick={() => setEditingLabel(false)}><Icon name="xmark"/></button>
                 </>
               ) : (
                 <>
                   <strong style={{ fontSize: "1.1em" }}>{identity.label}</strong>
-                  <button className="btn-small" onClick={() => { setLabelDraft(identity.label); setEditingLabel(true); }}>✏️ {t("edit")}</button>
+                  <button className="btn-small" onClick={() => { setLabelDraft(identity.label); setEditingLabel(true); }}><Icon name="edit"/> {t("edit")}</button>
                 </>
               )}
             </div>
             <p style={{ fontSize: "0.8em", opacity: 0.65 }}>{t("since")}: {new Date(identity.created_at * 1000).toLocaleDateString()}</p>
             {identity.kubo_peer_id && <p className="hash-cell" title={identity.kubo_peer_id}>Kubo: {identity.kubo_peer_id}</p>}
             {identity.iroh_node_id && <p className="hash-cell" title={identity.iroh_node_id}>iroh: {identity.iroh_node_id}</p>}
-            <button className="btn-small btn-pin" style={{ marginTop: "6px" }} onClick={exportIdentity}>📋 {t("exportIdentity")}</button>
+            <button className="btn-small btn-pin" style={{ marginTop: "6px" }} onClick={exportIdentity}><Icon name="clipboard"/> {t("exportIdentity")}</button>
           </div>
         ) : (
           <button className="btn-small btn-download" onClick={loadIdentity}>{t("loadIdentity")}</button>
@@ -109,20 +110,20 @@ export default function Dashboard({
       {/* ── Phase D3: 节点健康度 ── */}
       {health && (
         <div className="status-card">
-          <h2>💓 {t("nodeHealth")}</h2>
+          <h2><Icon name="heart"/> {t("nodeHealth")}</h2>
           <div className="status-details">
-            <p>⏱ {t("appUptime")}: <strong>{formatUptime(health.app_uptime_secs)}</strong>
+            <p><Icon name="clock"/> {t("appUptime")}: <strong>{formatUptime(health.app_uptime_secs)}</strong>
               {health.daemon_uptime_secs != null && <> · {t("nodeUptime")}: <strong>{formatUptime(health.daemon_uptime_secs)}</strong></>}
             </p>
             {health.num_objects != null && (
-              <p>📦 {t("numObjects")}: {health.num_objects} · {t("repoSize")}: {formatBytes(health.repo_size ?? 0)}</p>
+              <p><Icon name="box"/> {t("numObjects")}: {health.num_objects} · {t("repoSize")}: {formatBytes(health.repo_size ?? 0)}</p>
             )}
-            {health.peers != null && <p>🔗 {t("connectedPeers")}: {health.peers}</p>}
+            {health.peers != null && <p><Icon name="link"/> {t("connectedPeers")}: {health.peers}</p>}
             {(health.bytes_in != null || health.bytes_out != null) && (
-              <p>⬇ {formatBytes(health.bytes_in ?? 0)} · ⬆ {formatBytes(health.bytes_out ?? 0)} <span style={{ opacity: 0.6 }}>({t("contribution")})</span></p>
+              <p><Icon name="download"/> {formatBytes(health.bytes_in ?? 0)} · <Icon name="upload"/> {formatBytes(health.bytes_out ?? 0)} <span style={{ opacity: 0.6 }}>({t("contribution")})</span></p>
             )}
-            {health.iroh_content_count != null && <p>🦀 iroh {t("contentItems")}: {health.iroh_content_count}</p>}
-            <button className="btn-small btn-download" style={{ marginTop: "4px" }} onClick={loadHealth}>🔄 {t("refresh")}</button>
+            {health.iroh_content_count != null && <p><Icon name="iroh"/> iroh {t("contentItems")}: {health.iroh_content_count}</p>}
+            <button className="btn-small btn-download" style={{ marginTop: "4px" }} onClick={loadHealth}><Icon name="refresh"/> {t("refresh")}</button>
           </div>
         </div>
       )}
@@ -163,7 +164,7 @@ export default function Dashboard({
         <div className="section-header">
           <h2>{t("nodeDashboard")}</h2>
           <button onClick={loadDashboard} disabled={!isRunning || dashLoading} className="btn-small">
-            {dashLoading ? "⏳" : "🔄"} {t("refresh")}
+            {dashLoading ? <span className="spinner"/> : <Icon name="refresh"/>} {t("refresh")}
             {cacheHit && <span className="cache-indicator">{t("cacheIndicator")}</span>}
           </button>
         </div>
@@ -285,7 +286,7 @@ export default function Dashboard({
 
       {/* ── Phase 4: 后端选择器 ── */}
       <div className="backend-bar">
-        <span className="backend-label">🔗 {t("activeBackend")}:</span>
+        <span className="backend-label"><Icon name="link"/> {t("activeBackend")}:</span>
         <select className="select-input" value={activeBackend} onChange={async (e) => {
           const v = e.target.value;
           try { await invoke("switch_backend", { backendType: v }); setActiveBackend(v); }
@@ -303,7 +304,7 @@ export default function Dashboard({
         }} className="btn-small">{t("viewCapabilities")}</button>
         {backendCaps && (
           <span className="backend-caps-badge" title={JSON.stringify(backendCaps, null, 2)}>
-            IPNS:{(backendCaps as any).ipns ? "✅" : "❌"} Pin:{(backendCaps as any).pinning ? "✅" : "❌"}
+            IPNS:{(backendCaps as any).ipns ? <Icon name="check"/> : <Icon name="xmark"/>} Pin:{(backendCaps as any).pinning ? <Icon name="check"/> : <Icon name="xmark"/>}
           </span>
         )}
         <button onClick={async () => {
@@ -314,7 +315,7 @@ export default function Dashboard({
           } catch (e) { setError(formatError(e)); }
           finally { setBenchRunning(false); }
         }} className="btn-small btn-download" disabled={benchRunning}>
-          {benchRunning ? "⏳" : "⚡"} {t("runBenchmark")}
+          {benchRunning ? <span className="spinner"/> : <Icon name="zap"/>} {t("runBenchmark")}
         </button>
         <button onClick={async () => {
           try {
@@ -324,7 +325,7 @@ export default function Dashboard({
           } catch (e) { setError(formatError(e)); }
           finally { setCompatRunning(false); }
         }} className="btn-small btn-pin" disabled={compatRunning}>
-          {compatRunning ? "⏳" : "🧪"} {t("runCompatTest")}
+          {compatRunning ? <span className="spinner"/> : <Icon name="flask"/>} {t("runCompatTest")}
         </button>
       </div>
 
@@ -335,7 +336,7 @@ export default function Dashboard({
 
           {/* 代理统计 */}
           <div className="phase3-card">
-            <div className="dash-card-title">⚡ {t("proxyStats")}</div>
+            <div className="dash-card-title"><Icon name="zap"/> {t("proxyStats")}</div>
             <div className="phase3-row">
               <span>{t("cacheHitRate")}</span>
               <span className="dash-value">
@@ -351,14 +352,14 @@ export default function Dashboard({
             <div className="phase3-row">
               <span>{t("circuitBreaker")}</span>
               <span className={`dash-value ${proxyStats && proxyStats.circuit_open_count > 0 ? "red" : "green"}`}>
-                {proxyStats && proxyStats.circuit_open_count > 0 ? `⚠️ ${proxyStats.circuit_open_count}x` : "✅ OK"}
+                {proxyStats && proxyStats.circuit_open_count > 0 ? <><Icon name="alert"/> {proxyStats.circuit_open_count}x</> : <><Icon name="check"/> OK</>}
               </span>
             </div>
           </div>
 
           {/* 离线队列 */}
           <div className="phase3-card">
-            <div className="dash-card-title">📋 {t("offlineQueue")}</div>
+            <div className="dash-card-title"><Icon name="clipboard"/> {t("offlineQueue")}</div>
             <div className="phase3-row">
               <span>{t("pendingOps")}</span>
               <span className={`dash-value ${offlineCount > 0 ? "orange" : "green"}`}>
@@ -373,13 +374,13 @@ export default function Dashboard({
               } catch (e) { setError(formatError(e)); }
             }} disabled={offlineCount === 0} className="btn-small btn-pin"
               style={{ marginTop: 8, width: "100%" }}>
-              {offlineCount > 0 ? `▶ ${t("flushQueue")} (${offlineCount})` : t("queueEmpty")}
+              {offlineCount > 0 ? <><Icon name="play"/> {t("flushQueue")} ({offlineCount})</> : t("queueEmpty")}
             </button>
           </div>
 
           {/* 带宽控制 */}
           <div className="phase3-card">
-            <div className="dash-card-title">📶 {t("bandwidthControl")}</div>
+            <div className="dash-card-title"><Icon name="signal"/> {t("bandwidthControl")}</div>
             <div className="phase3-row">
               <span>{t("rateIn")}</span>
               <span className="dash-value green">{bwStatus ? formatRate(bwStatus.rate_in) : "—"}</span>
@@ -406,7 +407,7 @@ export default function Dashboard({
         {/* 基准测试结果 */}
         {benchResult && (
           <div className="bench-result">
-            <h3>⚡ {t("benchmarkResults")}</h3>
+            <h3><Icon name="zap"/> {t("benchmarkResults")}</h3>
             <div className="bench-summary">
               <span>{t("winner")}: {(benchResult as any).winner || "—"}</span>
               <span>{t("speedup")}: {(benchResult as any).speedup_ratio ? `${((benchResult as any).speedup_ratio).toFixed(2)}x` : "—"}</span>
@@ -426,14 +427,14 @@ export default function Dashboard({
         {/* 兼容性测试结果 */}
         {compatResult && (
           <div className="compat-result">
-            <h3>🧪 {t("compatResults")}</h3>
+            <h3><Icon name="flask"/> {t("compatResults")}</h3>
             <div className="compat-score">
               {(compatResult as any).compatibility_score?.toFixed(0)}% {t("compatible")}
             </div>
             <div className="compat-summary">
-              <span>✅ {(compatResult as any).passed}</span>
-              <span>❌ {(compatResult as any).failed}</span>
-              <span>⏭ {(compatResult as any).skipped}</span>
+              <span><Icon name="check"/> {(compatResult as any).passed}</span>
+              <span><Icon name="xmark"/> {(compatResult as any).failed}</span>
+              <span>— {(compatResult as any).skipped}</span>
             </div>
           </div>
         )}

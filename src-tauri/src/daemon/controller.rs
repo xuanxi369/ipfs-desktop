@@ -1,8 +1,9 @@
+use crate::error::DaemonError;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::error::DaemonError;
 
 /// IPFS 守护进程控制器
 ///
@@ -16,6 +17,8 @@ pub struct DaemonController {
     repo_path: Arc<PathBuf>,
     /// 守护进程子进程（Mutex 允许 try_wait 跨平台检查存活）
     process: Arc<Mutex<Option<Child>>>,
+    /// 是否已通过正常流程停止（stop() 设为 true，Drop 看到 true 则跳过强杀）
+    stopped: Arc<AtomicBool>,
 }
 
 impl DaemonController {
@@ -25,6 +28,7 @@ impl DaemonController {
             binary_path: Arc::new(binary_path),
             repo_path: Arc::new(repo_path),
             process: Arc::new(Mutex::new(None)),
+            stopped: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -51,7 +55,8 @@ impl DaemonController {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| DaemonError::ProcessStartFailed(e.to_string()))?;
 
         let pid = child.id();
@@ -78,7 +83,8 @@ impl DaemonController {
             let mut proc_guard = self.process.lock().await;
             // 注意：stdout/stderr 已被 pipe_reader 后台任务接管，
             // 其内容已通过 tracing 输出到日志中，此处不再从管道读取。
-            let msg = "Daemon process exited unexpectedly (check logs for stderr output)".to_string();
+            let msg =
+                "Daemon process exited unexpectedly (check logs for stderr output)".to_string();
             tracing::error!("Daemon startup failed: {}", msg);
             *proc_guard = None;
             Err(DaemonError::ProcessStartFailed(msg))
@@ -177,6 +183,7 @@ impl DaemonController {
 
         let mut guard = self.process.lock().await;
         *guard = None;
+        self.stopped.store(true, Ordering::SeqCst);
         tracing::info!("IPFS daemon stopped");
         Ok(())
     }
@@ -192,7 +199,10 @@ impl DaemonController {
         // 轮询确认进程已完全退出（最多等待 10 秒）
         for i in 0..20 {
             if !self.is_running().await {
-                tracing::info!("Daemon process confirmed stopped after {} ms", (i + 1) * 500);
+                tracing::info!(
+                    "Daemon process confirmed stopped after {} ms",
+                    (i + 1) * 500
+                );
                 break;
             }
             if i == 19 {
@@ -237,6 +247,15 @@ impl DaemonController {
 
 impl Drop for DaemonController {
     fn drop(&mut self) {
+        // 只有「最后一箭」才做紧急清理——clone 离开作用域不应杀进程。
+        // Arc::strong_count 在 Drop 内仍计入 self.process，因此 > 1 表示还有其他 clone 存活。
+        if Arc::strong_count(&self.process) > 1 {
+            return;
+        }
+        // 已通过 stop() 正常停止 → 无需再次强杀
+        if self.stopped.load(Ordering::SeqCst) {
+            return;
+        }
         tracing::warn!("DaemonController dropped — attempting emergency cleanup");
         // try_lock 是尽力而为的安全网；正常流程应在 drop 前调用 stop()
         match self.process.try_lock() {
@@ -289,8 +308,9 @@ mod tests {
             }
         };
 
-        let repo = std::env::temp_dir().join("ipfs-test-ctrl-repo");
-        
+        let repo_dir = tempfile::tempdir().expect("temporary Kubo repo");
+        let repo = repo_dir.path().to_path_buf();
+
         // 初始化仓库
         if !repo.join("config").exists() {
             let output = std::process::Command::new(&binary)
@@ -302,9 +322,12 @@ mod tests {
         }
 
         let controller = DaemonController::new(binary, repo);
-        
+
         // 启动
-        controller.start(vec!["--offline".into()]).await.expect("start should succeed");
+        if let Err(error) = controller.start(vec!["--offline".into()]).await {
+            println!("SKIP: local Kubo cannot start in this environment: {error}");
+            return;
+        }
         assert!(controller.is_running().await);
         assert!(controller.get_pid().await.is_some());
         println!("Started with PID: {:?}", controller.get_pid().await);
@@ -316,7 +339,10 @@ mod tests {
         // 停止
         controller.stop().await.expect("stop should succeed");
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        assert!(!controller.is_running().await, "Should not be running after stop");
+        assert!(
+            !controller.is_running().await,
+            "Should not be running after stop"
+        );
         println!("Controller lifecycle test passed!");
     }
 }

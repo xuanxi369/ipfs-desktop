@@ -3,10 +3,9 @@
 //! 提供托盘图标、右键菜单以及窗口显示/隐藏控制。
 
 use tauri::{
-    AppHandle,
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{TrayIcon, TrayIconBuilder},
-    Manager,
+    AppHandle, Manager,
 };
 
 /// 构建并挂载系统托盘，返回 TrayIcon 句柄（调用方需保持其存活）
@@ -15,7 +14,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
     let show = MenuItemBuilder::with_id("show", "Show Window").build(app)?;
     let hide = MenuItemBuilder::with_id("hide", "Hide Window").build(app)?;
     let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
-    let quit   = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&show)
@@ -25,11 +24,10 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
         .build()?;
 
     // ── 图标 ──
-    let icon = app.default_window_icon().cloned()
-        .unwrap_or_else(|| {
-            // 后备：内嵌一个 32×32 的纯色图标
-            tauri::image::Image::new(&[0u8; 32 * 32 * 4], 32, 32)
-        });
+    let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
+        // 后备：内嵌一个 32×32 的纯色图标
+        tauri::image::Image::new(&[0u8; 32 * 32 * 4], 32, 32)
+    });
 
     let tray = TrayIconBuilder::new()
         .icon(icon)

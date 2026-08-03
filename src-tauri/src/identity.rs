@@ -94,8 +94,11 @@ mod tests {
     fn temp_store() -> IdentityStore {
         static N: AtomicU32 = AtomicU32::new(0);
         let n = N.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir()
-            .join(format!("ipfs-identity-test-{}-{}.json", std::process::id(), n));
+        let path = std::env::temp_dir().join(format!(
+            "ipfs-identity-test-{}-{}.json",
+            std::process::id(),
+            n
+        ));
         let _ = std::fs::remove_file(&path);
         IdentityStore::new(path)
     }
@@ -117,7 +120,10 @@ mod tests {
         let orig = s.load();
         let updated = s.set_label("Charles's Node").unwrap();
         assert_eq!(updated.label, "Charles's Node");
-        assert_eq!(updated.created_at, orig.created_at, "created_at must be stable");
+        assert_eq!(
+            updated.created_at, orig.created_at,
+            "created_at must be stable"
+        );
         // 新实例从磁盘恢复标签
         let reloaded = s.load();
         assert_eq!(reloaded.label, "Charles's Node");

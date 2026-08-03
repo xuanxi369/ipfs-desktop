@@ -35,7 +35,11 @@ async fn test_find_binary() {
 
     // 验证版本信息可获取
     let version = BinaryFinder::get_version(&path);
-    assert!(version.is_ok(), "Should be able to get version: {:?}", version.err());
+    assert!(
+        version.is_ok(),
+        "Should be able to get version: {:?}",
+        version.err()
+    );
     println!("IPFS version: {}", version.unwrap());
 }
 
@@ -75,16 +79,20 @@ async fn test_daemon_lifecycle() {
     // ── 阶段 1: 启动守护进程 ──
     println!("--- Phase 1: Starting daemon ---");
     let controller = DaemonController::new(binary.clone(), repo.clone());
-    
+
     let flags = vec![
         "--offline".to_string(), // 离线模式，避免连接公网
     ];
 
-    controller.start(flags)
+    controller
+        .start(flags)
         .await
         .expect("Daemon should start successfully");
 
-    assert!(controller.is_running().await, "Daemon should be running after start");
+    assert!(
+        controller.is_running().await,
+        "Daemon should be running after start"
+    );
     println!("Daemon started with PID: {:?}", controller.get_pid().await);
 
     // 给守护进程一点时间初始化 HTTP API
@@ -93,7 +101,7 @@ async fn test_daemon_lifecycle() {
     // ── 阶段 2: API 连通性验证 ──
     println!("--- Phase 2: API connectivity check ---");
     let api_client = IpfsApiClient::new(api_addr.clone());
-    
+
     // 2a. 检查可达性
     let reachable = api_client.is_reachable().await;
     assert!(reachable, "IPFS API should be reachable after daemon start");
@@ -106,15 +114,24 @@ async fn test_daemon_lifecycle() {
     // 2c. 获取版本
     let version_info = api_client.version().await.expect("Should get version");
     println!("Version: {}", version_info.version);
-    assert!(!version_info.version.is_empty(), "Version should not be empty");
+    assert!(
+        !version_info.version.is_empty(),
+        "Version should not be empty"
+    );
 
     // 2d. 获取仓库统计
     let repo_stat = api_client.repo_stat().await.expect("Should get repo stats");
-    println!("Repo size: {} bytes, {} objects", repo_stat.repo_size, repo_stat.num_objects);
+    println!(
+        "Repo size: {} bytes, {} objects",
+        repo_stat.repo_size, repo_stat.num_objects
+    );
 
     // ── 阶段 3: 停止守护进程 ──
     println!("--- Phase 3: Stopping daemon ---");
-    controller.stop().await.expect("Daemon should stop successfully");
+    controller
+        .stop()
+        .await
+        .expect("Daemon should stop successfully");
     println!("Daemon stopped");
 
     // 等待进程完全退出
@@ -122,11 +139,17 @@ async fn test_daemon_lifecycle() {
 
     // ── 阶段 4: 确认进程已消失 ──
     println!("--- Phase 4: Verify process is gone ---");
-    assert!(!controller.is_running().await, "Daemon should not be running after stop");
+    assert!(
+        !controller.is_running().await,
+        "Daemon should not be running after stop"
+    );
 
     // API 应该不可达
     let reachable_after_stop = api_client.is_reachable().await;
-    assert!(!reachable_after_stop, "API should NOT be reachable after daemon stop");
+    assert!(
+        !reachable_after_stop,
+        "API should NOT be reachable after daemon stop"
+    );
     println!("Process confirmed gone, API unreachable");
 
     println!("=== All lifecycle phases passed! ===");
@@ -145,7 +168,7 @@ async fn test_daemon_restart() {
     };
 
     let repo = temp_repo_path("restart");
-    
+
     // 确保仓库存在
     if !repo.join("config").exists() {
         let output = std::process::Command::new(&binary)
@@ -160,13 +183,22 @@ async fn test_daemon_restart() {
     let flags = vec!["--offline".to_string()];
 
     // 启动 → 验证 → 重启 → 验证
-    controller.start(flags.clone()).await.expect("First start should succeed");
+    controller
+        .start(flags.clone())
+        .await
+        .expect("First start should succeed");
     assert!(controller.is_running().await);
     let pid_before = controller.get_pid().await;
     println!("First start PID: {:?}", pid_before);
 
-    controller.restart(flags).await.expect("Restart should succeed");
-    assert!(controller.is_running().await, "Daemon should be running after restart");
+    controller
+        .restart(flags)
+        .await
+        .expect("Restart should succeed");
+    assert!(
+        controller.is_running().await,
+        "Daemon should be running after restart"
+    );
     let pid_after = controller.get_pid().await;
     println!("After restart PID: {:?}", pid_after);
 
@@ -187,11 +219,14 @@ async fn test_daemon_restart() {
 async fn test_api_client_connection_error() {
     // 使用一个不可能在用的地址
     let client = IpfsApiClient::new("http://127.0.0.1:59999".to_string());
-    
+
     let reachable = client.is_reachable().await;
     assert!(!reachable, "Should not be reachable on unused port");
 
     let result = client.id().await;
-    assert!(result.is_err(), "Should return error when daemon is not running");
+    assert!(
+        result.is_err(),
+        "Should return error when daemon is not running"
+    );
     println!("Error (expected): {}", result.unwrap_err());
 }

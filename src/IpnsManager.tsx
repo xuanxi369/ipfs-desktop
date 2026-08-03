@@ -1,4 +1,7 @@
 import { useTranslation } from "react-i18next";
+import { useState } from "react";
+import { Icon } from "./Icons";
+import { shortHash } from "./types";
 
 interface IpnsManagerProps {
   isRunning: boolean;
@@ -31,17 +34,20 @@ export default function IpnsManager({
   publishIpns, resolveIpns, generateNewKey, loadKeyList, deleteKeyByLabel,
 }: IpnsManagerProps) {
   const { t } = useTranslation();
+  const [confirmLabel, setConfirmLabel] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = async (value: string) => { await navigator.clipboard?.writeText(value); setCopied(value); window.setTimeout(() => setCopied(null), 1400); };
 
   return (
     <div className="ipns-section">
       <div className="section-header">
-        <h2>{t("ipnsManagement")}</h2>
+        <div><span className="section-kicker">PUBLISHING</span><h2>{t("ipnsManagement")}</h2><p className="section-description">Publish mutable names while private keys remain managed by Kubo.</p></div>
         <button onClick={loadKeyList} disabled={!isRunning} className="btn-small">{t("refresh")}</button>
       </div>
 
       {/* ── IPNS 发布 ── */}
       <div className="ipns-card">
-        <h3>📤 {t("ipnsPublish")}</h3>
+        <h3><Icon name="upload"/> {t("ipnsPublish")}</h3>
         <div className="input-row">
           <input type="text" className="cid-input" placeholder={t("enterCidToPublish")}
             value={ipnsCid} onChange={(e) => setIpnsCid(e.target.value)} disabled={!isRunning} />
@@ -57,7 +63,7 @@ export default function IpnsManager({
             <option value="168h">7d</option>
           </select>
           <button onClick={publishIpns} disabled={!isRunning || !ipnsCid.trim()} className="btn-small btn-pin">
-            📤 {t("publish")}
+            <Icon name="upload"/> {t("publish")}
           </button>
         </div>
         {ipnsPublishResult && (
@@ -67,12 +73,12 @@ export default function IpnsManager({
 
       {/* ── IPNS 解析 ── */}
       <div className="ipns-card">
-        <h3>📥 {t("ipnsResolve")}</h3>
+        <h3><Icon name="download"/> {t("ipnsResolve")}</h3>
         <div className="input-row">
           <input type="text" className="cid-input" placeholder={t("enterIpnsName")}
             value={ipnsResolveName} onChange={(e) => setIpnsResolveName(e.target.value)} disabled={!isRunning} />
           <button onClick={resolveIpns} disabled={!isRunning || !ipnsResolveName.trim()} className="btn-small btn-download">
-            🔍 {t("resolve")}
+            <Icon name="search"/> {t("resolve")}
           </button>
         </div>
         {ipnsResolveResult && (
@@ -82,7 +88,7 @@ export default function IpnsManager({
 
       {/* ── 密钥管理 ── */}
       <div className="ipns-card">
-        <h3>🔑 {t("keyManagement")}</h3>
+        <h3><Icon name="key"/> {t("keyManagement")}</h3>
         <div className="input-row">
           <input type="text" className="cid-input small-input" placeholder={t("newKeyLabel")}
             value={newKeyLabel} onChange={(e) => setNewKeyLabel(e.target.value)} disabled={!isRunning} />
@@ -100,10 +106,11 @@ export default function IpnsManager({
                 {keyList.map((k, i) => (
                   <tr key={i}>
                     <td className="key-label-cell">{k.label}</td>
-                    <td className="hash-cell" title={k.ipns_name}>{k.ipns_name}</td>
+                    <td><button className="hash-button" title={k.ipns_name} onClick={() => copy(k.ipns_name)}>{shortHash(k.ipns_name)} {copied === k.ipns_name ? <span className="copied-label">{t("copied")}</span> : <Icon name="copy"/>}</button></td>
                     <td>
-                      <button onClick={() => deleteKeyByLabel(k.label)} className="btn-small btn-danger"
-                        disabled={!isRunning}>❌</button>
+                      <button onClick={() => setConfirmLabel(k.label)} className="btn-small btn-danger"
+                        disabled={!isRunning}><Icon name="xmark"/></button>
+                      {confirmLabel === k.label && <div className="confirm-popover"><span>{t("confirmDeleteKey")}</span><button onClick={() => { deleteKeyByLabel(k.label); setConfirmLabel(null); }}>{t("confirm")}</button><button onClick={() => setConfirmLabel(null)}>{t("cancel")}</button></div>}
                     </td>
                   </tr>
                 ))}

@@ -131,5 +131,17 @@
   "appUptime": "应用运行",
   "nodeUptime": "节点在线",
   "contribution": "已服务 / 贡献",
-  "contentItems": "内容条目"
+  "contentItems": "内容条目",
+  "copied": "已复制",
+  "confirm": "确认",
+  "cancel": "取消",
+  "confirmUnpin": "确认取消本地保留？",
+  "confirmDeleteKey": "确认删除此密钥记录？",
+  "loading": "加载中",
+  "contentLibrary": "内容库",
+  "indexedItems": "条索引内容",
+  "backend": "后端",
+  "added": "添加时间",
+  "langZh": "中文",
+  "langEn": "English"
 }

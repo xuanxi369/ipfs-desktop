@@ -8,17 +8,16 @@ pub enum DaemonStatus {
     #[default]
     Stopped,
     Starting,
-    Running { 
-        pid: u32, 
+    Running {
+        pid: u32,
         peer_id: String,
         api_addr: String,
     },
     Stopping,
-    Failed { 
-        error: String 
+    Failed {
+        error: String,
     },
 }
-
 
 /// IPFS API 响应 - 版本信息
 #[derive(Debug, Deserialize, Serialize)]

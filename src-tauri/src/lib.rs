@@ -1,28 +1,29 @@
 // 模块声明
+pub mod backend_router;
+pub mod backend_trait;
+pub mod bandwidth;
+pub mod benchmark;
+pub mod cache;
 pub mod commands;
+pub mod compat_test;
 pub mod config;
+pub mod content_index;
 pub mod daemon;
 pub mod error;
+pub mod identity;
+pub mod iroh_adapter;
+pub mod keyring;
+pub mod kubo_adapter;
+pub mod offline_queue;
+pub mod proxy;
 pub mod state;
 pub mod tray;
 pub mod types;
-pub mod cache;
-pub mod keyring;
-pub mod proxy;
-pub mod offline_queue;
-pub mod bandwidth;
-pub mod backend_trait;
-pub mod kubo_adapter;
-pub mod iroh_adapter;
-pub mod backend_router;
-pub mod identity;
-pub mod compat_test;
-pub mod benchmark;
 
 use config::AppConfig;
 use state::AppState;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tauri::Manager;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// 初始化日志系统
 fn init_logging() {
@@ -31,23 +32,22 @@ fn init_logging() {
         .unwrap_or_else(|| std::env::current_dir().unwrap())
         .join("ipfs-desktop-rust")
         .join("logs");
-    
+
     // 创建日志目录
     std::fs::create_dir_all(&log_dir).ok();
-    
+
     // 创建文件日志
     let file_appender = tracing_appender::rolling::daily(log_dir, "app.log");
-    
+
     // 初始化订阅者
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with(tracing_subscriber::fmt::layer().with_writer(file_appender))
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
         .init();
-    
+
     tracing::info!("Logging initialized");
 }
 
@@ -55,9 +55,9 @@ fn init_logging() {
 pub fn run() {
     // 初始化日志
     init_logging();
-    
+
     tracing::info!("IPFS Desktop Rust starting...");
-    
+
     // 加载配置
     let config = AppConfig::load().unwrap_or_else(|e| {
         tracing::warn!("Failed to load config: {}, using defaults", e);
@@ -66,10 +66,10 @@ pub fn run() {
     tracing::info!("Configuration loaded");
     tracing::info!("IPFS Path: {:?}", config.get_ipfs_path());
     tracing::info!("API Address: {}", config.api_addr);
-    
+
     // 创建应用状态
     let app_state = AppState::new(config);
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
@@ -89,6 +89,8 @@ pub fn run() {
             commands::add_file,
             commands::add_files,
             commands::add_file_with_progress,
+            commands::list_content,
+            commands::remove_content_record,
             commands::set_auto_launch,
             commands::get_auto_launch,
             commands::cat_file,
@@ -136,6 +138,18 @@ pub fn run() {
             commands::export_identity,
             // Phase D3: 节点健康度
             commands::get_node_health,
+            // 二进制哈希校验
+            commands::get_binary_verification_info,
+            commands::set_binary_hash,
+            // MFS (Mutable File System)
+            commands::mfs_ls,
+            commands::mfs_stat,
+            commands::mfs_mkdir,
+            commands::mfs_rm,
+            commands::mfs_cp,
+            commands::mfs_mv,
+            commands::mfs_read,
+            commands::mfs_write,
         ])
         .on_window_event(|window, event| {
             // Phase D2「可长期在线」：关窗不退出，隐藏到托盘让节点后台常驻。
@@ -149,11 +163,11 @@ pub fn run() {
         .setup(|app| {
             tracing::info!("Tauri setup complete");
             tracing::info!("App version: {}", app.package_info().version);
-            
+
             // 初始化系统托盘（manage 保持 TrayIcon 存活，防止被 Drop 移除）
             let tray = tray::setup_tray(app.handle())?;
             app.handle().manage(tray);
-            
+
             Ok(())
         })
         .run(tauri::generate_context!())

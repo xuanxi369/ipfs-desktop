@@ -91,7 +91,10 @@ pub struct KuboConfigManager {
 
 impl KuboConfigManager {
     pub fn new(binary_path: PathBuf, repo_path: PathBuf) -> Self {
-        Self { binary_path, repo_path }
+        Self {
+            binary_path,
+            repo_path,
+        }
     }
 
     /// 读取 Kubo 配置项
@@ -167,17 +170,22 @@ impl KuboConfigManager {
 
     /// 获取当前 Swarm 连接限制
     pub fn get_swarm_limits(&self) -> Result<SwarmLimits, String> {
-        let conns = self.get_config("Swarm.ResourceMgr.Limits.System.Connections")
+        let conns = self
+            .get_config("Swarm.ResourceMgr.Limits.System.Connections")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(600);
 
-        let streams = self.get_config("Swarm.ResourceMgr.Limits.System.Streams")
+        let streams = self
+            .get_config("Swarm.ResourceMgr.Limits.System.Streams")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(2048);
 
-        Ok(SwarmLimits { max_connections: conns, max_streams: streams })
+        Ok(SwarmLimits {
+            max_connections: conns,
+            max_streams: streams,
+        })
     }
 }
 

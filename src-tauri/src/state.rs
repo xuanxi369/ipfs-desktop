@@ -1,18 +1,18 @@
+use crate::backend_trait::BackendType;
+use crate::bandwidth::{BandwidthConfig, BandwidthMonitor, KuboConfigManager};
+use crate::cache::CacheStore;
+use crate::config::AppConfig;
+use crate::daemon::{DaemonController, IpfsApiClient};
+use crate::iroh_adapter::IrohBackend;
+use crate::keyring::KeyManager;
+use crate::kubo_adapter::KuboBackend;
+use crate::offline_queue::{OfflineQueue, ReplayEngine};
+use crate::proxy::ProxyClient;
+use crate::types::DaemonStatus;
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
-use tauri::Emitter;
-use crate::config::AppConfig;
-use crate::types::DaemonStatus;
-use crate::daemon::{DaemonController, IpfsApiClient};
-use crate::cache::CacheStore;
-use crate::keyring::KeyManager;
-use crate::proxy::ProxyClient;
-use crate::offline_queue::{OfflineQueue, ReplayEngine};
-use crate::bandwidth::{BandwidthConfig, BandwidthMonitor, KuboConfigManager};
-use crate::backend_trait::BackendType;
-use crate::kubo_adapter::KuboBackend;
-use crate::iroh_adapter::IrohBackend;
 
 /// 全局应用状态
 #[derive(Clone)]
@@ -40,6 +40,7 @@ pub struct AppState {
 
     /// SQLite 缓存
     pub cache: Arc<CacheStore>,
+    pub content_index: Arc<crate::content_index::ContentIndex>,
 
     /// 密钥管理器
     pub key_manager: Arc<KeyManager>,
@@ -101,23 +102,33 @@ impl AppState {
         let cache_dir = dirs::data_local_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join("ipfs-desktop-rust");
-        let cache = CacheStore::new(cache_dir.join("cache.db"))
-            .unwrap_or_else(|e| {
-                tracing::warn!("Failed to open cache: {}, using fallback", e);
-                // 如果 SQLite 失败（极少数情况），尝试内存缓存
-                CacheStore::new(std::env::temp_dir().join("ipfs-cache-fallback.db"))
-                    .expect("Failed to create fallback cache")
-            });
+        let cache = CacheStore::new(cache_dir.join("cache.db")).unwrap_or_else(|e| {
+            tracing::warn!("Failed to open cache: {}, using fallback", e);
+            // 如果 SQLite 失败（极少数情况），尝试内存缓存
+            CacheStore::new(std::env::temp_dir().join("ipfs-cache-fallback.db"))
+                .expect("Failed to create fallback cache")
+        });
 
         let key_manager = KeyManager::new();
 
         // Phase 3: 初始化智能代理
         let cache_arc = Arc::new(cache);
+        let content_index = Arc::new(
+            crate::content_index::ContentIndex::new(cache_dir.join("content_index.db"))
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to open content index: {}, using fallback", e);
+                    crate::content_index::ContentIndex::new(
+                        std::env::temp_dir()
+                            .join(format!("ipfs-content-index-{}.db", std::process::id())),
+                    )
+                    .expect("fallback content index")
+                }),
+        );
         let proxy_client = ProxyClient::new(config.api_addr.clone(), cache_arc.clone());
 
         // Phase 3: 初始化离线队列
-        let offline_queue = OfflineQueue::new(cache_dir.join("offline_queue.db"))
-            .unwrap_or_else(|e| {
+        let offline_queue =
+            OfflineQueue::new(cache_dir.join("offline_queue.db")).unwrap_or_else(|e| {
                 tracing::warn!("Failed to open offline queue: {}, using fallback", e);
                 OfflineQueue::new(std::env::temp_dir().join("ipfs-offline-queue-fallback.db"))
                     .expect("Failed to create fallback offline queue")
@@ -129,10 +140,13 @@ impl AppState {
 
         // Phase C: 双栈路由器（默认 KuboOnly，行为等价现有单栈）
         // 来源标记 / provider 持久化到 cache_dir/{cid_origins,cid_providers}.json
-        let backend_router = Arc::new(crate::backend_router::BackendRouter::new(
+        let initial_policy = crate::backend_router::RoutePolicy::parse(&config.route_policy)
+            .unwrap_or(crate::backend_router::RoutePolicy::KuboOnly);
+        let backend_router = Arc::new(crate::backend_router::BackendRouter::new_with_policy(
             kubo_backend.clone(),
             iroh_backend.clone(),
             Some(cache_dir.clone()),
+            initial_policy,
         ));
 
         // Phase D1: 节点身份记录（人类可读标签，持久化到 cache_dir/node_identity.json）
@@ -149,6 +163,7 @@ impl AppState {
             health_monitor: Arc::new(RwLock::new(None)),
             restart_attempts: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             cache: cache_arc,
+            content_index,
             key_manager: Arc::new(key_manager),
             dashboard_poller: Arc::new(RwLock::new(None)),
             offline_queue: Arc::new(offline_queue),
@@ -208,7 +223,8 @@ impl AppState {
 
     /// 重置自愈重启计数（用户手动启动 / 守护进程持续健康后调用）
     pub fn reset_restart_attempts(&self) {
-        self.restart_attempts.store(0, std::sync::atomic::Ordering::SeqCst);
+        self.restart_attempts
+            .store(0, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// 仅启动进程并置状态（**不**拉起任何后台循环）。
@@ -221,7 +237,9 @@ impl AppState {
     ) -> Result<(), crate::error::DaemonError> {
         use crate::error::DaemonError;
 
-        let binary_path = match crate::daemon::BinaryFinder::find() {
+        let binary_path = match crate::daemon::BinaryFinder::find_with_expected_hash(config_hash(
+            &self.get_config().await,
+        )) {
             Some(p) => p,
             None => {
                 self.set_daemon_status(DaemonStatus::Failed {
@@ -264,7 +282,10 @@ impl AppState {
                 Ok(())
             }
             Err(e) => {
-                self.set_daemon_status(DaemonStatus::Failed { error: e.to_string() }).await;
+                self.set_daemon_status(DaemonStatus::Failed {
+                    error: e.to_string(),
+                })
+                .await;
                 let _ = app_handle.emit("daemon-status-changed", &self.get_daemon_status().await);
                 Err(e)
             }
@@ -327,12 +348,18 @@ impl AppState {
                         if auto_restart {
                             let n = state.restart_attempts.fetch_add(1, Ordering::SeqCst) + 1;
                             if n <= MAX_AUTO_RESTARTS {
-                                tracing::warn!("Auto-restarting daemon (attempt {}/{})", n, MAX_AUTO_RESTARTS);
+                                tracing::warn!(
+                                    "Auto-restarting daemon (attempt {}/{})",
+                                    n,
+                                    MAX_AUTO_RESTARTS
+                                );
                                 state.set_daemon_controller(None).await;
                                 state.set_daemon_status(DaemonStatus::Starting).await;
-                                let _ = app_handle.emit("daemon-status-changed", &DaemonStatus::Starting);
+                                let _ = app_handle
+                                    .emit("daemon-status-changed", &DaemonStatus::Starting);
                                 // 线性退避，给系统喘息
-                                tokio::time::sleep(tokio::time::Duration::from_secs(2 * n as u64)).await;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2 * n as u64))
+                                    .await;
                                 // 只起进程（不重新 spawn 健康监控——本任务继续看护），避免递归 async。
                                 match state.start_process(&app_handle).await {
                                     Ok(_) => {
@@ -349,16 +376,30 @@ impl AppState {
                                     }
                                 }
                             }
-                            tracing::error!("Auto-restart cap ({}) reached — giving up", MAX_AUTO_RESTARTS);
+                            tracing::error!(
+                                "Auto-restart cap ({}) reached — giving up",
+                                MAX_AUTO_RESTARTS
+                            );
                         }
 
                         // 不自愈 / 已达上限 → 标记失败
-                        let error_msg = "Daemon process exited unexpectedly (detected by health monitor)".to_string();
-                        state.set_daemon_status(DaemonStatus::Failed { error: error_msg.clone() }).await;
+                        let error_msg =
+                            "Daemon process exited unexpectedly (detected by health monitor)"
+                                .to_string();
+                        state
+                            .set_daemon_status(DaemonStatus::Failed {
+                                error: error_msg.clone(),
+                            })
+                            .await;
                         state.set_daemon_controller(None).await;
-                        if let Err(e) = app_handle.emit("daemon-status-changed",
-                            &DaemonStatus::Failed { error: error_msg }) {
-                            tracing::warn!("Failed to emit daemon-status-changed from health monitor: {}", e);
+                        if let Err(e) = app_handle.emit(
+                            "daemon-status-changed",
+                            &DaemonStatus::Failed { error: error_msg },
+                        ) {
+                            tracing::warn!(
+                                "Failed to emit daemon-status-changed from health monitor: {}",
+                                e
+                            );
                         }
                         break;
                     }
@@ -412,7 +453,10 @@ impl AppState {
                                 state.cache.set_peers(&json);
                                 Some(p)
                             }
-                            Err(e) => { tracing::warn!("Poller peers: {}", e); None }
+                            Err(e) => {
+                                tracing::warn!("Poller peers: {}", e);
+                                None
+                            }
                         }
                     };
 
@@ -427,7 +471,10 @@ impl AppState {
                                 }
                                 Some(b)
                             }
-                            Err(e) => { tracing::warn!("Poller bandwidth: {}", e); None }
+                            Err(e) => {
+                                tracing::warn!("Poller bandwidth: {}", e);
+                                None
+                            }
                         }
                     };
 
@@ -438,7 +485,10 @@ impl AppState {
                                 state.cache.set_bitswap(&json);
                                 Some(b)
                             }
-                            Err(e) => { tracing::warn!("Poller bitswap: {}", e); None }
+                            Err(e) => {
+                                tracing::warn!("Poller bitswap: {}", e);
+                                None
+                            }
                         }
                     };
 
@@ -449,7 +499,10 @@ impl AppState {
                                 state.cache.set_repo_stats(&json);
                                 Some(r)
                             }
-                            Err(e) => { tracing::warn!("Poller repo: {}", e); None }
+                            Err(e) => {
+                                tracing::warn!("Poller repo: {}", e);
+                                None
+                            }
                         }
                     };
 
@@ -465,7 +518,12 @@ impl AppState {
                         repo: Option<crate::daemon::RepoStats>,
                     }
 
-                    let tick = DashboardTick { peers, bandwidth: bw, bitswap: bs, repo };
+                    let tick = DashboardTick {
+                        peers,
+                        bandwidth: bw,
+                        bitswap: bs,
+                        repo,
+                    };
                     if let Err(e) = app_handle.emit("dashboard-tick", &tick) {
                         tracing::warn!("Failed to emit dashboard-tick: {}", e);
                     }
@@ -521,11 +579,14 @@ impl AppState {
                     let engine = ReplayEngine::new(queue.clone());
                     let (success, failed) = engine.replay_all(&api).await;
                     if success > 0 || failed > 0 {
-                        if let Err(e) = app_handle.emit("replay-progress", &serde_json::json!({
-                            "success": success,
-                            "failed": failed,
-                            "remaining": queue.len().unwrap_or(0),
-                        })) {
+                        if let Err(e) = app_handle.emit(
+                            "replay-progress",
+                            &serde_json::json!({
+                                "success": success,
+                                "failed": failed,
+                                "remaining": queue.len().unwrap_or(0),
+                            }),
+                        ) {
                             tracing::warn!("Failed to emit replay-progress: {}", e);
                         }
                     }
@@ -542,6 +603,10 @@ impl AppState {
     pub async fn get_proxy_client(&self) -> Option<ProxyClient> {
         self.proxy_client.read().await.clone()
     }
+}
+
+fn config_hash(config: &AppConfig) -> Option<String> {
+    config.kubo_binary_sha256.clone()
 }
 
 #[cfg(test)]
@@ -570,17 +635,28 @@ mod tests {
         let state = AppState::new(AppConfig::default());
 
         state.set_daemon_status(DaemonStatus::Starting).await;
-        assert!(matches!(state.get_daemon_status().await, DaemonStatus::Starting));
+        assert!(matches!(
+            state.get_daemon_status().await,
+            DaemonStatus::Starting
+        ));
 
-        state.set_daemon_status(DaemonStatus::Running {
-            pid: 1234,
-            peer_id: "test".into(),
-            api_addr: "http://localhost:5001".into(),
-        }).await;
-        assert!(matches!(state.get_daemon_status().await, DaemonStatus::Running { .. }));
+        state
+            .set_daemon_status(DaemonStatus::Running {
+                pid: 1234,
+                peer_id: "test".into(),
+                api_addr: "http://localhost:5001".into(),
+            })
+            .await;
+        assert!(matches!(
+            state.get_daemon_status().await,
+            DaemonStatus::Running { .. }
+        ));
 
         state.set_daemon_status(DaemonStatus::Stopped).await;
-        assert!(matches!(state.get_daemon_status().await, DaemonStatus::Stopped));
+        assert!(matches!(
+            state.get_daemon_status().await,
+            DaemonStatus::Stopped
+        ));
     }
 
     #[tokio::test]
@@ -616,17 +692,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_present() {
-        let state = AppState::new(AppConfig::default());
+        let dir = tempfile::tempdir().unwrap();
+        let cache = crate::cache::CacheStore::new(dir.path().join("cache.db")).unwrap();
         // 缓存应该可用（写入并读取）
-        state.cache.set_dashboard(r#"{"test":1}"#);
-        assert!(state.cache.get_dashboard().is_some());
+        cache.set_dashboard(r#"{"test":1}"#);
+        assert!(cache.get_dashboard().is_some());
     }
 
     #[tokio::test]
     async fn test_key_manager_present() {
         // 使用临时目录，避免污染真实用户密钥目录
-        let dir = std::env::temp_dir()
-            .join(format!("ipfs-state-keytest-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ipfs-state-keytest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mgr = crate::keyring::KeyManager::with_dir(dir);
         let rec = crate::keyring::KeyRecord::from_kubo("state-test", "k51state");

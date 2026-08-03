@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
-use std::time::Duration;
-use urlencoding::encode;
 use crate::error::DaemonError;
 use crate::types::AddResult;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use urlencoding::encode;
 
 /// IPFS HTTP API 客户端
 ///
@@ -206,14 +206,15 @@ impl IpfsApiClient {
         let url = self.api_url("id");
         tracing::debug!("Fetching node ID from: {}", url);
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -236,14 +237,15 @@ impl IpfsApiClient {
         let url = self.api_url("version");
         tracing::debug!("Fetching version from: {}", url);
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -266,14 +268,15 @@ impl IpfsApiClient {
         let url = self.api_url("repo/stat");
         tracing::debug!("Fetching repo stats from: {}", url);
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -287,7 +290,11 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
-        tracing::info!("Repo size: {} bytes, {} objects", stats.repo_size, stats.num_objects);
+        tracing::info!(
+            "Repo size: {} bytes, {} objects",
+            stats.repo_size,
+            stats.num_objects
+        );
         Ok(stats)
     }
 
@@ -296,14 +303,15 @@ impl IpfsApiClient {
         let url = self.api_url("swarm/peers");
         tracing::debug!("Fetching swarm peers from: {}", url);
 
-        let response = self.client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -340,14 +348,15 @@ impl IpfsApiClient {
         let url = self.api_url("repo/gc");
         tracing::info!("Starting garbage collection...");
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -424,11 +433,13 @@ impl IpfsApiClient {
             .unwrap_or("unnamed")
             .to_string();
 
-        let total = tokio::fs::metadata(file_path).await
+        let total = tokio::fs::metadata(file_path)
+            .await
             .map_err(|e| DaemonError::IoError(format!("Failed to stat file: {}", e)))?
             .len();
 
-        let file = tokio::fs::File::open(file_path).await
+        let file = tokio::fs::File::open(file_path)
+            .await
             .map_err(|e| DaemonError::IoError(format!("Failed to open file: {}", e)))?;
 
         // 分块流：每读到一块就累加已发送字节并回调
@@ -447,10 +458,10 @@ impl IpfsApiClient {
             .mime_str("application/octet-stream")
             .map_err(|e| DaemonError::ApiError(format!("Failed to create multipart: {}", e)))?;
 
-        let form = reqwest::multipart::Form::new()
-            .part("file", part);
+        let form = reqwest::multipart::Form::new().part("file", part);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .multipart(form)
             .send()
@@ -467,13 +478,16 @@ impl IpfsApiClient {
             )));
         }
 
-        let text = response.text().await
+        let text = response
+            .text()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
         // IPFS add 返回 NDJSON，取第一行
         let first_line = text.lines().next().unwrap_or(&text);
-        let result: AddResult = serde_json::from_str(first_line)
-            .map_err(|e| DaemonError::ApiParseError(format!("Failed to parse add result: {}", e)))?;
+        let result: AddResult = serde_json::from_str(first_line).map_err(|e| {
+            DaemonError::ApiParseError(format!("Failed to parse add result: {}", e))
+        })?;
 
         tracing::info!("File added: {} ({})", result.name, result.hash);
         Ok(result)
@@ -486,14 +500,15 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("cat?arg={}", encode(cid)));
         tracing::info!("Cat file: {}", cid);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -504,8 +519,9 @@ impl IpfsApiClient {
             )));
         }
 
-        let bytes = response.bytes().await
-            .map_err(|e| DaemonError::ApiParseError(format!("Failed to read cat response: {}", e)))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            DaemonError::ApiParseError(format!("Failed to read cat response: {}", e))
+        })?;
 
         tracing::info!("Cat completed: {} bytes", bytes.len());
         Ok(bytes.to_vec())
@@ -531,14 +547,15 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("cat?arg={}", encode(cid)));
         tracing::info!("Cat stream to file: {} -> {:?}", cid, output_path);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -553,27 +570,34 @@ impl IpfsApiClient {
 
         // 确保父目录存在，再创建目标文件句柄
         if let Some(parent) = output_path.parent() {
-            tokio::fs::create_dir_all(parent).await
+            tokio::fs::create_dir_all(parent)
+                .await
                 .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
         }
-        let mut file = tokio::fs::File::create(output_path).await
+        let mut file = tokio::fs::File::create(output_path)
+            .await
             .map_err(|e| DaemonError::IoError(format!("Failed to create output file: {}", e)))?;
 
         let mut written: u64 = 0;
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                DaemonError::ApiParseError(format!("Stream error: {}", e))
-            })?;
-            file.write_all(&chunk).await
+            let chunk =
+                chunk.map_err(|e| DaemonError::ApiParseError(format!("Stream error: {}", e)))?;
+            file.write_all(&chunk)
+                .await
                 .map_err(|e| DaemonError::IoError(format!("Failed to write chunk: {}", e)))?;
             written += chunk.len() as u64;
             on_progress(written, total);
         }
-        file.flush().await
+        file.flush()
+            .await
             .map_err(|e| DaemonError::IoError(format!("Failed to flush output file: {}", e)))?;
 
-        tracing::info!("Cat stream completed: {} bytes -> {:?}", written, output_path);
+        tracing::info!(
+            "Cat stream completed: {} bytes -> {:?}",
+            written,
+            output_path
+        );
         Ok(written)
     }
 
@@ -582,14 +606,15 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("files/stat?arg=/ipfs/{}", encode(cid)));
         tracing::debug!("Stat file: {}", cid);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -604,7 +629,9 @@ impl IpfsApiClient {
             cumulative_size: u64,
         }
 
-        let stat: StatResult = response.json().await
+        let stat: StatResult = response
+            .json()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
         Ok(stat.cumulative_size)
@@ -615,14 +642,15 @@ impl IpfsApiClient {
         let url = self.api_url("pin/ls?type=recursive&stream-channels=true");
         tracing::info!("Listing pins...");
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -631,13 +659,17 @@ impl IpfsApiClient {
             )));
         }
 
-        let text = response.text().await
+        let text = response
+            .text()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
         // pin/ls 返回 NDJSON，逐行解析
         let mut pins = Vec::new();
         for line in text.lines() {
-            if line.trim().is_empty() { continue; }
+            if line.trim().is_empty() {
+                continue;
+            }
             if let Ok(pin) = serde_json::from_str::<PinEntry>(line) {
                 pins.push(pin);
             }
@@ -652,26 +684,30 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("pin/add?arg={}", encode(cid)));
         tracing::info!("Pinning: {}", cid);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(DaemonError::ApiError(format!("pin add failed: {}", body)));
         }
 
-        let text = response.text().await
+        let text = response
+            .text()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
         let lines: Vec<&str> = text.lines().collect();
         let last = lines.last().copied().unwrap_or(&text);
-        let result: PinAddResult = serde_json::from_str(last)
-            .map_err(|e| DaemonError::ApiParseError(format!("Failed to parse pin add result: {}", e)))?;
+        let result: PinAddResult = serde_json::from_str(last).map_err(|e| {
+            DaemonError::ApiParseError(format!("Failed to parse pin add result: {}", e))
+        })?;
 
         tracing::info!("Pinned: {}", cid);
         Ok(result)
@@ -682,26 +718,30 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("pin/rm?arg={}", encode(cid)));
         tracing::info!("Unpinning: {}", cid);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(DaemonError::ApiError(format!("pin rm failed: {}", body)));
         }
 
-        let text = response.text().await
+        let text = response
+            .text()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
         let lines: Vec<&str> = text.lines().collect();
         let last = lines.last().copied().unwrap_or(&text);
-        let result: PinRmResult = serde_json::from_str(last)
-            .map_err(|e| DaemonError::ApiParseError(format!("Failed to parse pin rm result: {}", e)))?;
+        let result: PinRmResult = serde_json::from_str(last).map_err(|e| {
+            DaemonError::ApiParseError(format!("Failed to parse pin rm result: {}", e))
+        })?;
 
         tracing::info!("Unpinned: {}", cid);
         Ok(result)
@@ -712,14 +752,15 @@ impl IpfsApiClient {
         let url = self.api_url("stats/bw");
         tracing::debug!("Fetching bandwidth stats...");
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -728,7 +769,9 @@ impl IpfsApiClient {
             )));
         }
 
-        let stats: BandwidthStats = response.json().await
+        let stats: BandwidthStats = response
+            .json()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
         Ok(stats)
     }
@@ -738,14 +781,15 @@ impl IpfsApiClient {
         let url = self.api_url("bitswap/stat");
         tracing::debug!("Fetching bitswap stats...");
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -754,14 +798,16 @@ impl IpfsApiClient {
             )));
         }
 
-        let stats: BitswapStats = response.json().await
+        let stats: BitswapStats = response
+            .json()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
         Ok(stats)
     }
 
     // ── IPNS 端点 ──
 
-    /// 发布 IPNS 名称
+    /// 发布 IPNS 名称（完整参数版本）
     ///
     /// 将 CID 绑定到指定的 IPNS 密钥名称。
     pub async fn name_publish(
@@ -770,14 +816,55 @@ impl IpfsApiClient {
         key_name: &str,
         lifetime: &str,
     ) -> Result<IpnsPublishResult, DaemonError> {
-        let url = self.api_url(&format!(
-            "name/publish?arg={}&key={}&lifetime={}",
-            encode(cid), encode(key_name), encode(lifetime)
-        ));
-        tracing::info!("IPNS publish: {} -> {}", cid, key_name);
+        self.name_publish_full(cid, key_name, lifetime, None, false)
+            .await
+    }
 
-        let response = self.client
+    /// 发布 IPNS 名称（完整参数版本）
+    ///
+    /// # Arguments
+    /// * `cid` - 要发布的 IPFS CID
+    /// * `key_name` - 使用的密钥名称
+    /// * `lifetime` - 记录生命周期（例如："24h", "1h30m"）
+    /// * `ipns_base` - IPNS 名称的编码基数（"b58mh" 或 "base36"）
+    /// * `allow_offline` - 是否允许离线发布（不广播到 DHT）
+    pub async fn name_publish_full(
+        &self,
+        cid: &str,
+        key_name: &str,
+        lifetime: &str,
+        ipns_base: Option<&str>,
+        allow_offline: bool,
+    ) -> Result<IpnsPublishResult, DaemonError> {
+        let mut query_params = vec![
+            ("arg", cid),
+            ("key", key_name),
+            ("lifetime", lifetime),
+        ];
+
+        // 添加可选参数
+        let ipns_base_str;
+        if let Some(base) = ipns_base {
+            ipns_base_str = base.to_string();
+            query_params.push(("ipns-base", &ipns_base_str));
+        }
+
+        let offline_str = if allow_offline { "true" } else { "false" };
+        query_params.push(("allow-offline", offline_str));
+
+        let url = self.api_url("name/publish");
+        tracing::info!(
+            "IPNS publish: {} -> {} (lifetime: {}, offline: {})",
+            cid,
+            key_name,
+            lifetime,
+            allow_offline
+        );
+
+        let response = self
+            .client
             .post(&url)
+            .query(&query_params)
             .send()
             .await
             .map_err(|e| DaemonError::ApiConnectionFailed {
@@ -787,10 +874,15 @@ impl IpfsApiClient {
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(DaemonError::ApiError(format!("name/publish failed: {}", body)));
+            return Err(DaemonError::ApiError(format!(
+                "name/publish failed: {}",
+                body
+            )));
         }
 
-        let result: IpnsPublishResult = response.json().await
+        let result: IpnsPublishResult = response
+            .json()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
         tracing::info!("IPNS published: {} -> {}", result.name, result.value);
@@ -802,21 +894,27 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("name/resolve?arg={}", encode(name)));
         tracing::info!("IPNS resolve: {}", name);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(DaemonError::ApiError(format!("name/resolve failed: {}", body)));
+            return Err(DaemonError::ApiError(format!(
+                "name/resolve failed: {}",
+                body
+            )));
         }
 
-        let result: IpnsResolveResult = response.json().await
+        let result: IpnsResolveResult = response
+            .json()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
         tracing::info!("IPNS resolved: {} -> {}", name, result.path);
@@ -828,21 +926,24 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("key/gen?arg={}&type=ed25519", encode(name)));
         tracing::info!("Key gen: {}", name);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(DaemonError::ApiError(format!("key/gen failed: {}", body)));
         }
 
-        let result: KeyGenResult = response.json().await
+        let result: KeyGenResult = response
+            .json()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
         tracing::info!("Key generated: {} -> {}", result.name, result.id);
@@ -854,14 +955,15 @@ impl IpfsApiClient {
         let url = self.api_url("key/list");
         tracing::debug!("Key list");
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(DaemonError::ApiError(format!(
@@ -870,7 +972,9 @@ impl IpfsApiClient {
             )));
         }
 
-        let result: KeyListResult = response.json().await
+        let result: KeyListResult = response
+            .json()
+            .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
         tracing::info!("{} keys found", result.keys.len());
@@ -882,14 +986,15 @@ impl IpfsApiClient {
         let url = self.api_url(&format!("key/rm?arg={}", encode(name)));
         tracing::info!("Key rm: {}", name);
 
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .map_err(|e| DaemonError::ApiConnectionFailed {
-                addr: self.api_addr.clone(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .post(&url)
+                .send()
+                .await
+                .map_err(|e| DaemonError::ApiConnectionFailed {
+                    addr: self.api_addr.clone(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -899,6 +1004,311 @@ impl IpfsApiClient {
         tracing::info!("Key removed: {}", name);
         Ok(())
     }
+    // ════════════════════════════════════════════════════════════════
+    // MFS (Mutable File System) API
+    // ════════════════════════════════════════════════════════════════
+
+    /// 列出 MFS 目录内容
+    pub async fn files_ls(&self, path: &str) -> Result<MfsLsResult, DaemonError> {
+        let url = self.api_url("files/ls");
+        let path_encoded = encode(path);
+
+        tracing::debug!("Listing MFS directory: {}", path);
+
+        let response = self.client
+            .post(&url)
+            .query(&[("arg", path_encoded.as_ref()), ("long", "true")])
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/ls failed: {}",
+                error_text
+            )));
+        }
+
+        let result = response
+            .json::<MfsLsResult>()
+            .await
+            .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
+
+        Ok(result)
+    }
+
+    /// 获取 MFS 文件/目录状态
+    pub async fn files_stat(&self, path: &str) -> Result<MfsStatResult, DaemonError> {
+        let url = self.api_url("files/stat");
+        let path_encoded = encode(path);
+
+        tracing::debug!("Getting MFS stat for: {}", path);
+
+        let response = self.client
+            .post(&url)
+            .query(&[("arg", path_encoded.as_ref())])
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/stat failed: {}",
+                error_text
+            )));
+        }
+
+        let result = response
+            .json::<MfsStatResult>()
+            .await
+            .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
+
+        Ok(result)
+    }
+
+    /// 创建 MFS 目录
+    pub async fn files_mkdir(&self, path: &str, parents: bool) -> Result<(), DaemonError> {
+        let url = self.api_url("files/mkdir");
+        let path_encoded = encode(path);
+
+        tracing::debug!("Creating MFS directory: {} (parents: {})", path, parents);
+
+        let response = self.client
+            .post(&url)
+            .query(&[
+                ("arg", path_encoded.as_ref()),
+                ("parents", if parents { "true" } else { "false" }),
+            ])
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/mkdir failed: {}",
+                error_text
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// 删除 MFS 文件/目录
+    pub async fn files_rm(&self, path: &str, recursive: bool) -> Result<(), DaemonError> {
+        let url = self.api_url("files/rm");
+        let path_encoded = encode(path);
+
+        tracing::debug!("Removing MFS path: {} (recursive: {})", path, recursive);
+
+        let response = self.client
+            .post(&url)
+            .query(&[
+                ("arg", path_encoded.as_ref()),
+                ("recursive", if recursive { "true" } else { "false" }),
+            ])
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/rm failed: {}",
+                error_text
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// 复制 IPFS 对象到 MFS
+    pub async fn files_cp(&self, source: &str, dest: &str) -> Result<(), DaemonError> {
+        let url = self.api_url("files/cp");
+        let source_encoded = encode(source);
+        let dest_encoded = encode(dest);
+
+        tracing::debug!("Copying to MFS: {} -> {}", source, dest);
+
+        let response = self.client
+            .post(&url)
+            .query(&[
+                ("arg", source_encoded.as_ref()),
+                ("arg", dest_encoded.as_ref()),
+            ])
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/cp failed: {}",
+                error_text
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// 移动/重命名 MFS 文件/目录
+    pub async fn files_mv(&self, source: &str, dest: &str) -> Result<(), DaemonError> {
+        let url = self.api_url("files/mv");
+        let source_encoded = encode(source);
+        let dest_encoded = encode(dest);
+
+        tracing::debug!("Moving in MFS: {} -> {}", source, dest);
+
+        let response = self.client
+            .post(&url)
+            .query(&[
+                ("arg", source_encoded.as_ref()),
+                ("arg", dest_encoded.as_ref()),
+            ])
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/mv failed: {}",
+                error_text
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// 从 MFS 读取文件内容
+    pub async fn files_read(&self, path: &str) -> Result<Vec<u8>, DaemonError> {
+        let url = self.api_url("files/read");
+        let path_encoded = encode(path);
+
+        tracing::debug!("Reading MFS file: {}", path);
+
+        let response = self.client
+            .post(&url)
+            .query(&[("arg", path_encoded.as_ref())])
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/read failed: {}",
+                error_text
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| DaemonError::ApiError(e.to_string()))?;
+
+        Ok(bytes.to_vec())
+    }
+
+    /// 写入内容到 MFS 文件
+    pub async fn files_write(
+        &self,
+        path: &str,
+        content: Vec<u8>,
+        create: bool,
+        truncate: bool,
+    ) -> Result<(), DaemonError> {
+        let url = self.api_url("files/write");
+        let path_encoded = encode(path);
+
+        tracing::debug!("Writing to MFS file: {} ({} bytes)", path, content.len());
+
+        let form = reqwest::multipart::Form::new()
+            .part("data", reqwest::multipart::Part::bytes(content));
+
+        let response = self.client
+            .post(&url)
+            .query(&[
+                ("arg", path_encoded.as_ref()),
+                ("create", if create { "true" } else { "false" }),
+                ("truncate", if truncate { "true" } else { "false" }),
+            ])
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| DaemonError::ApiConnectionFailed {
+                addr: self.api_addr.clone(),
+                detail: e.to_string(),
+            })?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(DaemonError::ApiError(format!(
+                "files/write failed: {}",
+                error_text
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+/// MFS 目录列表结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MfsLsResult {
+    #[serde(rename = "Entries")]
+    pub entries: Option<Vec<MfsEntry>>,
+}
+
+/// MFS 目录条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MfsEntry {
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Type")]
+    pub entry_type: i32, // 0 = file, 1 = directory
+    #[serde(rename = "Size")]
+    pub size: u64,
+    #[serde(rename = "Hash")]
+    pub hash: String,
+}
+
+/// MFS 文件/目录状态结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MfsStatResult {
+    #[serde(rename = "Hash")]
+    pub hash: String,
+    #[serde(rename = "Size")]
+    pub size: u64,
+    #[serde(rename = "CumulativeSize")]
+    pub cumulative_size: u64,
+    #[serde(rename = "Blocks")]
+    pub blocks: u64,
+    #[serde(rename = "Type")]
+    pub file_type: String, // "file" or "directory"
 }
 
 #[cfg(test)]

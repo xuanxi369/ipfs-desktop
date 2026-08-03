@@ -10,7 +10,7 @@
 //! - pin_rm (CID)
 //! - ipns_publish (CID + key_name + lifetime)
 
-use rusqlite::{Connection, params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -25,20 +25,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[serde(tag = "op", content = "payload")]
 pub enum OfflineOperation {
     /// 添加文件（CID 预留 + 本地路径 — 实际添加发生在联网后）
-    AddFile {
-        file_path: String,
-        queued_at: u64,
-    },
+    AddFile { file_path: String, queued_at: u64 },
     /// Pin 添加
-    PinAdd {
-        cid: String,
-        queued_at: u64,
-    },
+    PinAdd { cid: String, queued_at: u64 },
     /// Pin 移除
-    PinRm {
-        cid: String,
-        queued_at: u64,
-    },
+    PinRm { cid: String, queued_at: u64 },
     /// IPNS 发布
     IpnsPublish {
         cid: String,
@@ -85,29 +76,34 @@ impl OfflineQueue {
                 retry_count INTEGER DEFAULT 0,
                 last_error TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_queue_created ON offline_queue(created_at);"
-        ).map_err(|e| format!("Failed to create offline queue tables: {}", e))?;
+            CREATE INDEX IF NOT EXISTS idx_queue_created ON offline_queue(created_at);",
+        )
+        .map_err(|e| format!("Failed to create offline queue tables: {}", e))?;
 
-        tracing::info!("Offline queue opened at {:?} ({} pending)",
+        tracing::info!(
+            "Offline queue opened at {:?} ({} pending)",
             db_path,
-            conn.query_row("SELECT COUNT(*) FROM offline_queue", [], |r| r.get::<_, i64>(0))
+            conn.query_row("SELECT COUNT(*) FROM offline_queue", [], |r| r
+                .get::<_, i64>(0))
                 .unwrap_or(0)
         );
 
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// 将操作加入队列
     pub fn enqueue(&self, op: OfflineOperation) -> Result<i64, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let json = serde_json::to_string(&op)
-            .map_err(|e| format!("Serialize error: {}", e))?;
+        let json = serde_json::to_string(&op).map_err(|e| format!("Serialize error: {}", e))?;
         let now = now_secs() as i64;
 
         conn.execute(
             "INSERT INTO offline_queue (op_json, created_at) VALUES (?1, ?2)",
             params![json, now],
-        ).map_err(|e| format!("Insert error: {}", e))?;
+        )
+        .map_err(|e| format!("Insert error: {}", e))?;
 
         let id = conn.last_insert_rowid();
         tracing::info!("OfflineQueue: enqueued operation id={}", id);
@@ -118,27 +114,39 @@ impl OfflineQueue {
     pub fn dequeue(&self) -> Result<Option<QueueEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, op_json, created_at, retry_count, last_error
-             FROM offline_queue ORDER BY created_at ASC LIMIT 1"
-        ).map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, op_json, created_at, retry_count, last_error
+             FROM offline_queue ORDER BY created_at ASC LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
 
-        let result: Option<QueueEntry> = stmt.query_row([], |row| {
-            let id: i64 = row.get(0)?;
-            let json: String = row.get(1)?;
-            let created_at: i64 = row.get(2)?;
-            let retry_count: u32 = row.get(3)?;
-            let last_error: Option<String> = row.get(4)?;
+        let result: Option<QueueEntry> = stmt
+            .query_row([], |row| {
+                let id: i64 = row.get(0)?;
+                let json: String = row.get(1)?;
+                let created_at: i64 = row.get(2)?;
+                let retry_count: u32 = row.get(3)?;
+                let last_error: Option<String> = row.get(4)?;
 
-            let operation: OfflineOperation = serde_json::from_str(&json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                    0, rusqlite::types::Type::Text,
-                    Box::new(e)
-                ))?;
+                let operation: OfflineOperation = serde_json::from_str(&json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
-            Ok(QueueEntry { id, operation, created_at: created_at as u64, retry_count, last_error })
-        }).optional()
-          .map_err(|e| e.to_string())?;
+                Ok(QueueEntry {
+                    id,
+                    operation,
+                    created_at: created_at as u64,
+                    retry_count,
+                    last_error,
+                })
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
 
         Ok(result)
     }
@@ -158,21 +166,31 @@ impl OfflineQueue {
         conn.execute(
             "UPDATE offline_queue SET retry_count = retry_count + 1, last_error = ?1 WHERE id = ?2",
             params![error, id],
-        ).map_err(|e| format!("Update error: {}", e))?;
-        tracing::warn!("OfflineQueue: id={} failed (retry {}): {}", id,
-            conn.query_row("SELECT retry_count FROM offline_queue WHERE id = ?1", params![id],
-                |r| r.get::<_, u32>(0)).unwrap_or(0),
-            error);
+        )
+        .map_err(|e| format!("Update error: {}", e))?;
+        tracing::warn!(
+            "OfflineQueue: id={} failed (retry {}): {}",
+            id,
+            conn.query_row(
+                "SELECT retry_count FROM offline_queue WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, u32>(0)
+            )
+            .unwrap_or(0),
+            error
+        );
         Ok(())
     }
 
     /// 丢弃超过最大重试次数的条目
     pub fn purge_stale(&self, max_retries: u32) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        let deleted = conn.execute(
-            "DELETE FROM offline_queue WHERE retry_count >= ?1",
-            params![max_retries],
-        ).map_err(|e| e.to_string())?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM offline_queue WHERE retry_count >= ?1",
+                params![max_retries],
+            )
+            .map_err(|e| e.to_string())?;
         if deleted > 0 {
             tracing::warn!("OfflineQueue: purged {} stale entries", deleted);
         }
@@ -182,9 +200,11 @@ impl OfflineQueue {
     /// 获取队列长度
     pub fn len(&self) -> Result<usize, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
-        conn.query_row("SELECT COUNT(*) FROM offline_queue", [], |r| r.get::<_, i64>(0))
-            .map(|c| c as usize)
-            .map_err(|e| e.to_string())
+        conn.query_row("SELECT COUNT(*) FROM offline_queue", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .map(|c| c as usize)
+        .map_err(|e| e.to_string())
     }
 
     /// 队列是否为空
@@ -196,26 +216,38 @@ impl OfflineQueue {
     pub fn list_all(&self) -> Result<Vec<QueueEntry>, String> {
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, op_json, created_at, retry_count, last_error
-             FROM offline_queue ORDER BY created_at ASC"
-        ).map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, op_json, created_at, retry_count, last_error
+             FROM offline_queue ORDER BY created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
 
-        let iter = stmt.query_map([], |row| {
-            let id: i64 = row.get(0)?;
-            let json: String = row.get(1)?;
-            let created_at: i64 = row.get(2)?;
-            let retry_count: u32 = row.get(3)?;
-            let last_error: Option<String> = row.get(4)?;
+        let iter = stmt
+            .query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let json: String = row.get(1)?;
+                let created_at: i64 = row.get(2)?;
+                let retry_count: u32 = row.get(3)?;
+                let last_error: Option<String> = row.get(4)?;
 
-            let operation: OfflineOperation = serde_json::from_str(&json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(
-                    0, rusqlite::types::Type::Text,
-                    Box::new(e)
-                ))?;
+                let operation: OfflineOperation = serde_json::from_str(&json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
-            Ok(QueueEntry { id, operation, created_at: created_at as u64, retry_count, last_error })
-        }).map_err(|e| e.to_string())?;
+                Ok(QueueEntry {
+                    id,
+                    operation,
+                    created_at: created_at as u64,
+                    retry_count,
+                    last_error,
+                })
+            })
+            .map_err(|e| e.to_string())?;
 
         let mut entries = Vec::new();
         for entry in iter {
@@ -247,7 +279,10 @@ pub struct ReplayEngine {
 
 impl ReplayEngine {
     pub fn new(queue: Arc<OfflineQueue>) -> Self {
-        Self { queue, max_retries: 3 }
+        Self {
+            queue,
+            max_retries: 3,
+        }
     }
 
     /// 对单个离线操作执行重放
@@ -275,8 +310,15 @@ impl ReplayEngine {
                 api.pin_rm(cid).await.map_err(|e| e.to_string())?;
                 tracing::info!("Replay: unpinned {}", cid);
             }
-            OfflineOperation::IpnsPublish { cid, key_name, lifetime, .. } => {
-                api.name_publish(cid, key_name, lifetime).await.map_err(|e| e.to_string())?;
+            OfflineOperation::IpnsPublish {
+                cid,
+                key_name,
+                lifetime,
+                ..
+            } => {
+                api.name_publish(cid, key_name, lifetime)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 tracing::info!("Replay: published IPNS {} -> {}", cid, key_name);
             }
         }
@@ -304,7 +346,8 @@ impl ReplayEngine {
             if entry.retry_count >= self.max_retries {
                 tracing::warn!(
                     "Entry id={} exceeded max retries ({}), discarding",
-                    entry.id, self.max_retries
+                    entry.id,
+                    self.max_retries
                 );
                 let _ = self.queue.complete(entry.id);
                 failed += 1;
@@ -346,8 +389,11 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir()
-            .join(format!("ipfs-offline-queue-test-{}-{}.db", std::process::id(), n));
+        let path = std::env::temp_dir().join(format!(
+            "ipfs-offline-queue-test-{}-{}.db",
+            std::process::id(),
+            n
+        ));
         let _ = std::fs::remove_file(&path);
         OfflineQueue::new(path).unwrap()
     }
@@ -373,12 +419,18 @@ mod tests {
     #[test]
     fn test_list_all() {
         let queue = test_queue();
-        queue.enqueue(OfflineOperation::PinAdd {
-            cid: "QmA".to_string(), queued_at: now_secs(),
-        }).unwrap();
-        queue.enqueue(OfflineOperation::PinRm {
-            cid: "QmB".to_string(), queued_at: now_secs(),
-        }).unwrap();
+        queue
+            .enqueue(OfflineOperation::PinAdd {
+                cid: "QmA".to_string(),
+                queued_at: now_secs(),
+            })
+            .unwrap();
+        queue
+            .enqueue(OfflineOperation::PinRm {
+                cid: "QmB".to_string(),
+                queued_at: now_secs(),
+            })
+            .unwrap();
 
         let all = queue.list_all().unwrap();
         assert_eq!(all.len(), 2);
@@ -387,9 +439,12 @@ mod tests {
     #[test]
     fn test_retry_and_purge() {
         let queue = test_queue();
-        let id = queue.enqueue(OfflineOperation::PinAdd {
-            cid: "QmTest".to_string(), queued_at: now_secs(),
-        }).unwrap();
+        let id = queue
+            .enqueue(OfflineOperation::PinAdd {
+                cid: "QmTest".to_string(),
+                queued_at: now_secs(),
+            })
+            .unwrap();
 
         // 模拟多次失败
         queue.record_failure(id, "test error 1").unwrap();
@@ -407,9 +462,12 @@ mod tests {
         let queue = test_queue();
         assert_eq!(queue.len().unwrap(), 0);
 
-        queue.enqueue(OfflineOperation::PinAdd {
-            cid: "QmTest".to_string(), queued_at: now_secs(),
-        }).unwrap();
+        queue
+            .enqueue(OfflineOperation::PinAdd {
+                cid: "QmTest".to_string(),
+                queued_at: now_secs(),
+            })
+            .unwrap();
         assert_eq!(queue.len().unwrap(), 1);
     }
 }

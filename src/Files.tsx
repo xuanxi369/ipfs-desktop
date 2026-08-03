@@ -1,5 +1,7 @@
 import { useTranslation } from "react-i18next";
-import { AddResult, DownloadProgress, UploadProgress, formatBytes } from "./types";
+import { AddResult, ContentRecord, DownloadProgress, UploadProgress, formatBytes, shortHash } from "./types";
+import { useState } from "react";
+import { Icon } from "./Icons";
 
 interface FilesProps {
   isRunning: boolean;
@@ -10,6 +12,8 @@ interface FilesProps {
   catResult: string;
   uploadProgress: UploadProgress | null;
   uploads: AddResult[];
+  contentRecords: ContentRecord[];
+  loadContentRecords: () => Promise<void>;
   routeHint: string;
   setDownloadCid: (v: string) => void;
   selectAndUpload: () => Promise<void>;
@@ -19,13 +23,18 @@ interface FilesProps {
 
 export default function Files({
   isRunning, uploading, downloadCid, downloadProgress, downloading,
-  catResult, uploadProgress, uploads, routeHint,
+  catResult, uploadProgress, uploads, routeHint, contentRecords, loadContentRecords,
   setDownloadCid, selectAndUpload, catByCid, downloadByCid,
 }: FilesProps) {
   const { t } = useTranslation();
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = async (hash: string) => { await navigator.clipboard?.writeText(hash); setCopied(hash); window.setTimeout(() => setCopied(null), 1400); };
 
   return (
     <div className="files-section">
+      <div className="page-intro"><div><span className="section-kicker">CONTENT</span><h2>{t("files")}</h2><p>Add local content or retrieve it from the distributed network.</p></div><span className={`availability-badge ${isRunning ? "ready" : ""}`}>{isRunning ? "Ready" : "Node offline"}</span></div>
+      <div className="section-header content-toolbar"><div><h3>{t("contentLibrary")}</h3><p className="section-description">{contentRecords.length} {t("indexedItems")}</p></div><button className="btn-small" onClick={loadContentRecords}><Icon name="activity"/> {t("refresh")}</button></div>
+      {contentRecords.length > 0 && <div className="content-table"><table><thead><tr><th>{t("name")}</th><th>CID</th><th>{t("size")}</th><th>{t("backend")}</th><th>{t("added")}</th></tr></thead><tbody>{contentRecords.map((f)=><tr key={f.cid}><td>{f.name}</td><td><button className="hash-button" title={f.cid} onClick={()=>copy(f.cid)}>{shortHash(f.cid)} <Icon name="copy"/></button></td><td>{formatBytes(f.size)}</td><td><span className="pin-type-badge">{f.backend}</span></td><td>{new Date(f.added_at*1000).toLocaleDateString()}</td></tr>)}</tbody></table></div>}
       {/* ── 上传 ── */}
       <h2>{t("uploadFiles")}</h2>
       <div className="drop-zone" onClick={selectAndUpload}>
@@ -63,15 +72,15 @@ export default function Files({
             disabled={!isRunning}
           />
           <button onClick={catByCid} disabled={!isRunning || !downloadCid.trim()} className="btn-small">
-            🔍 {t("preview")}
+            <Icon name="search"/> {t("preview")}
           </button>
           <button onClick={downloadByCid} disabled={!isRunning || !downloadCid.trim() || downloading} className="btn-small btn-download">
-            {downloading ? "⏳" : "⬇"} {t("download")}
+            {downloading ? <span className="spinner"/> : <Icon name="download"/>} {t("download")}
           </button>
         </div>
         {routeHint && (
           <div style={{ fontSize: "0.82em", opacity: 0.75, marginTop: "4px" }}>
-            🔀 {t("routeTo")}: <strong>{routeHint}</strong>
+            <Icon name="shuffle"/> {t("routeTo")}: <strong>{routeHint}</strong>
           </div>
         )}
       </div>
@@ -112,7 +121,7 @@ export default function Files({
               {uploads.map((f, i) => (
                 <tr key={i}>
                   <td>{f.Name}</td>
-                  <td className="hash-cell">{f.Hash}</td>
+                  <td><button className="hash-button" title={f.Hash} onClick={() => copy(f.Hash)}>{shortHash(f.Hash)} {copied === f.Hash ? <span className="copied-label">{t("copied")}</span> : <Icon name="copy"/>}</button></td>
                   <td>{f.Size}</td>
                 </tr>
               ))}

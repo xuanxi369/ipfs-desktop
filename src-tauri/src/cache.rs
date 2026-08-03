@@ -9,10 +9,10 @@
 //! - Repo 统计：TTL 60 秒
 //! - 节点 ID/版本：TTL 300 秒（基本不变）
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 缓存条目 TTL（秒）
 const TTL_DASHBOARD: u64 = 10;
@@ -34,8 +34,8 @@ impl CacheStore {
                 .map_err(|e| format!("Failed to create cache dir: {}", e))?;
         }
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("Failed to open cache db: {}", e))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("Failed to open cache db: {}", e))?;
 
         // 创建缓存表
         conn.execute_batch(
@@ -44,12 +44,15 @@ impl CacheStore {
                 value  TEXT NOT NULL,
                 ts     INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_cache_ts ON cache(ts);"
-        ).map_err(|e| format!("Failed to create cache tables: {}", e))?;
+            CREATE INDEX IF NOT EXISTS idx_cache_ts ON cache(ts);",
+        )
+        .map_err(|e| format!("Failed to create cache tables: {}", e))?;
 
         tracing::info!("Cache store opened at {:?}", db_path);
 
-        Ok(Self { conn: Mutex::new(conn) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
     }
 
     /// 获取缓存值（若未过期）
@@ -57,15 +60,17 @@ impl CacheStore {
         let conn = self.conn.lock().ok()?;
         let now = now_secs();
 
-        let mut stmt = conn.prepare(
-            "SELECT value, ts FROM cache WHERE key = ?1"
-        ).ok()?;
+        let mut stmt = conn
+            .prepare("SELECT value, ts FROM cache WHERE key = ?1")
+            .ok()?;
 
-        let result = stmt.query_row(params![key], |row| {
-            let value: String = row.get(0)?;
-            let ts: i64 = row.get(1)?;
-            Ok((value, ts as u64))
-        }).ok()?;
+        let result = stmt
+            .query_row(params![key], |row| {
+                let value: String = row.get(0)?;
+                let ts: i64 = row.get(1)?;
+                Ok((value, ts as u64))
+            })
+            .ok()?;
 
         if now.saturating_sub(result.1) < ttl_secs {
             Some(result.0)
@@ -179,8 +184,8 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir()
-            .join(format!("ipfs-cache-test-{}-{}.db", std::process::id(), n));
+        let path =
+            std::env::temp_dir().join(format!("ipfs-cache-test-{}-{}.db", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         CacheStore::new(path).unwrap()
     }

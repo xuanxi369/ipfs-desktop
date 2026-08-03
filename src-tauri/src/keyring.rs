@@ -73,8 +73,7 @@ impl KeyManager {
         let path = self.key_file_path(&record.label);
         let content = serde_json::to_string_pretty(record)
             .map_err(|e| format!("Failed to serialize key record: {}", e))?;
-        std::fs::write(&path, content)
-            .map_err(|e| format!("Failed to write key record: {}", e))?;
+        std::fs::write(&path, content).map_err(|e| format!("Failed to write key record: {}", e))?;
         tracing::info!("Saved key record: {} ({})", record.label, record.ipns_name);
         Ok(())
     }
@@ -87,8 +86,7 @@ impl KeyManager {
         }
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read key record: {}", e))?;
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse key record: {}", e))
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse key record: {}", e))
     }
 
     /// 列出所有本地记录
@@ -141,7 +139,13 @@ impl KeyManager {
         // 标签用于文件名，做最小化清洗防止路径穿越
         let safe: String = label
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         self.keys_dir.join(format!("{}.json", safe))
     }
@@ -155,8 +159,8 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir()
-            .join(format!("ipfs-keyring-test-{}-{}", std::process::id(), n));
+        let dir =
+            std::env::temp_dir().join(format!("ipfs-keyring-test-{}-{}", std::process::id(), n));
         let _ = std::fs::remove_dir_all(&dir);
         KeyManager::with_dir(dir)
     }
@@ -176,8 +180,10 @@ mod tests {
     #[test]
     fn test_list_records() {
         let mgr = temp_manager();
-        mgr.save_record(&KeyRecord::from_kubo("list-1", "k51a")).unwrap();
-        mgr.save_record(&KeyRecord::from_kubo("list-2", "k51b")).unwrap();
+        mgr.save_record(&KeyRecord::from_kubo("list-1", "k51a"))
+            .unwrap();
+        mgr.save_record(&KeyRecord::from_kubo("list-2", "k51b"))
+            .unwrap();
         let keys = mgr.list_records().unwrap();
         assert_eq!(keys.len(), 2);
     }
@@ -185,7 +191,8 @@ mod tests {
     #[test]
     fn test_delete_record() {
         let mgr = temp_manager();
-        mgr.save_record(&KeyRecord::from_kubo("del", "k51c")).unwrap();
+        mgr.save_record(&KeyRecord::from_kubo("del", "k51c"))
+            .unwrap();
         mgr.delete_record("del").unwrap();
         assert!(mgr.load_record("del").is_err());
     }
@@ -193,7 +200,8 @@ mod tests {
     #[test]
     fn test_sync_from_kubo_prunes_stale() {
         let mgr = temp_manager();
-        mgr.save_record(&KeyRecord::from_kubo("stale", "k51old")).unwrap();
+        mgr.save_record(&KeyRecord::from_kubo("stale", "k51old"))
+            .unwrap();
         // Kubo 只报告 "fresh"，"stale" 应被清理
         mgr.sync_from_kubo(&[KeyRecord::from_kubo("fresh", "k51new")]);
         let keys = mgr.list_records().unwrap();

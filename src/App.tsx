@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import "./App.css";
 
 import {
-  DaemonStatus, AppConfig, AddResult, PinEntry, PinList,
+  DaemonStatus, AppConfig, AddResult, ContentRecord, PinEntry, PinList,
   DashboardStats, DownloadProgress, UploadProgress,
   NodeIdentityInfo, NodeHealth, DashboardTick,
   formatError, formatBytes, TabName,
@@ -18,16 +18,22 @@ import Files from "./Files";
 import PinManager from "./PinManager";
 import IpnsManager from "./IpnsManager";
 import IrohNative from "./IrohNative";
+import { Icon } from "./Icons";
 
 // ── 主组件 ──
 
 function App() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [status, setStatus] = useState<DaemonStatus>({ type: "Stopped" });
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [error, setError] = useState<string>("");
   const [activeTab, setActiveTab] = useState<TabName>("dashboard");
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    const saved = localStorage.getItem("ipfs-theme");
+    return saved === "dark" || (!saved && matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  });
   const [uploads, setUploads] = useState<AddResult[]>([]);
+  const [contentRecords, setContentRecords] = useState<ContentRecord[]>([]);
   const [uploading, setUploading] = useState(false);
 
   // ── Phase B/C: iroh 原生收发 + 路由状态 ──
@@ -99,6 +105,11 @@ function App() {
 
   const webuiUrl = config ? `${config.api_addr}/webui` : "";
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("ipfs-theme", theme);
+  }, [theme]);
+
   // ── 初始化 ──
   useEffect(() => {
     let mounted = true;
@@ -130,6 +141,7 @@ function App() {
     });
     loadConfig();
     loadStatus();
+    loadContentRecords();
     return () => {
       mounted = false;
       unlistenStatus.then((fn) => fn());
@@ -149,6 +161,7 @@ function App() {
     try { const s = await invoke<DaemonStatus>("get_daemon_status"); setStatus(s); setError(""); }
     catch (e) { setError(`Failed to get status: ${formatError(e)}`); }
   }
+  async function loadContentRecords() { try { setContentRecords(await invoke<ContentRecord[]>("list_content")); } catch (e) { setError(`Content index failed: ${formatError(e)}`); } }
 
   // ── 守护进程操作 ──
   async function startDaemon() {
@@ -330,6 +343,7 @@ function App() {
         results.push(r);
       }
       setUploads((prev) => [...prev, ...results]);
+      await loadContentRecords();
       setError("");
     } catch (e) {
       setError(`Upload failed: ${formatError(e)}`);
@@ -458,23 +472,53 @@ function App() {
     }
   }
 
-  return (
-    <div className="container">
-      <h1>{t("appTitle")}</h1>
+  const navItems: { tab: TabName; icon: string; group: string }[] = [
+    { tab: "dashboard", icon: "dashboard", group: "Node" },
+    { tab: "files", icon: "files", group: "Content" },
+    { tab: "pins", icon: "pins", group: "Content" },
+    { tab: "ipns", icon: "ipns", group: "Publishing" },
+    { tab: "iroh", icon: "iroh", group: "Network" },
+    { tab: "webui", icon: "web", group: "Advanced" },
+  ];
+  const pageTitle = t(activeTab);
+  const navigate = (tab: TabName) => {
+    setActiveTab(tab);
+    if (tab === "dashboard") { loadIdentity(); loadHealth(); }
+    if (tab === "dashboard" && isRunning) { loadDashboard(); invoke("set_prefetch_hint", { hint: "dashboard" }); }
+    if (tab === "pins" && isRunning) { loadPins(); invoke("set_prefetch_hint", { hint: "pins" }); }
+    if (tab === "ipns" && isRunning) { loadKeyList(); invoke("set_prefetch_hint", { hint: "ipns" }); }
+    if (tab === "iroh") { loadIrohInfo(); loadRoutePolicy(); }
+  };
 
-      {/* ── Tab 导航 ── */}
-      <nav className="tab-nav">
-        {(["dashboard", "webui", "files", "pins", "ipns", "iroh"] as TabName[]).map((tab) => (
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand"><div className="brand-mark"><Icon name="cube"/></div><div><strong>IPFS</strong><span>Desktop Rust</span></div></div>
+        <nav className="side-nav">
+          {navItems.map(({ tab, icon, group }, index) => (
+            <div key={tab}>
+              {(index === 0 || navItems[index - 1].group !== group) && <div className="nav-group">{group}</div>}
           <button
-            key={tab}
-            className={`tab-btn ${activeTab === tab ? "active" : ""}`}
-            onClick={() => { setActiveTab(tab); if (tab === "dashboard") { loadIdentity(); loadHealth(); } if (tab === "dashboard" && isRunning) { loadDashboard(); invoke("set_prefetch_hint", { hint: "dashboard" }); } if (tab === "pins" && isRunning) { loadPins(); invoke("set_prefetch_hint", { hint: "pins" }); } if (tab === "ipns" && isRunning) { loadKeyList(); invoke("set_prefetch_hint", { hint: "ipns" }); } if (tab === "iroh") { loadIrohInfo(); loadRoutePolicy(); } }}
+            className={`nav-item ${activeTab === tab ? "active" : ""}`}
+            onClick={() => navigate(tab)}
             disabled={tab === "webui" && !isRunning}
-          >
-            {t(tab)}
-          </button>
+          ><Icon name={icon}/><span>{t(tab)}</span>{tab === "iroh" && <em>LAB</em>}</button>
+            </div>
         ))}
-      </nav>
+        </nav>
+        <div className="sidebar-status"><span className={`status-dot ${isRunning ? "online" : ""}`}/><div><strong>{isRunning ? "Node online" : "Node offline"}</strong><small>{routePolicy === "Auto" ? "Smart routing" : routePolicy}</small></div></div>
+      </aside>
+      <section className="workspace">
+        <header className="topbar">
+          <div><p className="eyebrow">IPFS DESKTOP</p><h1>{pageTitle}</h1></div>
+          <div className="topbar-actions">
+            <span className={`node-pill ${isRunning ? "online" : ""}`}><span className="status-dot"/>{status.type}</span>
+            <span className="route-pill">{routePolicy === "Auto" ? "Smart routing" : routePolicy}</span>
+            <button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle theme"><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
+            <button className="icon-button" onClick={() => i18n.changeLanguage(i18n.language === "zh" ? "en" : "zh")} title={i18n.language === "zh" ? "Switch to English" : "切换到中文"} style={{fontSize:"11px",fontWeight:700,width:"auto",padding:"0 10px"}}>{i18n.language === "zh" ? "EN" : "中"}</button>
+          </div>
+        </header>
+        <main className="main-content">
 
       {/* ═══════════════════════════════════════════════ */}
       {/* Dashboard 标签                                   */}
@@ -546,6 +590,8 @@ function App() {
           catResult={catResult}
           uploadProgress={uploadProgress}
           uploads={uploads}
+          contentRecords={contentRecords}
+          loadContentRecords={loadContentRecords}
           routeHint={routeHint}
           setDownloadCid={setDownloadCid}
           selectAndUpload={selectAndUpload}
@@ -620,9 +666,9 @@ function App() {
       )}
 
       {/* ── 全局错误 ── */}
-      {error && <div className="error-message">{error}</div>}
-
-      <footer><p>{t("builtWith")}</p></footer>
+        </main>
+        {error && <div className="toast-error"><strong>Something went wrong</strong><span>{error}</span><button onClick={() => setError("")}>×</button></div>}
+      </section>
     </div>
   );
 }

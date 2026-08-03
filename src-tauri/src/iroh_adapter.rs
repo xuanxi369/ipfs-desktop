@@ -33,12 +33,11 @@
 //! let bytes = store.get_bytes(tag.hash).await?;
 //! ```
 
-use async_trait::async_trait;
 use crate::backend_trait::{
-    Backend, BackendType, BackendCapabilities, BackendError,
-    NodeInfo, RepoInfo, PeerInfo as BPeerInfo,
-    AddOutput, PinEntry, BandwidthInfo, BitswapInfo, IpnsOutput, IpnsPath,
+    AddOutput, Backend, BackendCapabilities, BackendError, BackendType, BandwidthInfo, BitswapInfo,
+    IpnsOutput, IpnsPath, NodeInfo, PeerInfo as BPeerInfo, PinEntry, RepoInfo,
 };
+use async_trait::async_trait;
 use std::path::Path;
 
 /// 从 BlobTicket 字符串中解析出内容 hash（cid）。
@@ -64,13 +63,13 @@ pub fn ticket_cid(_ticket: &str) -> Option<String> {
 fn iroh_capabilities() -> BackendCapabilities {
     BackendCapabilities {
         backend_type: BackendType::Iroh,
-        ipns: false,       // Iroh 使用内容寻址，不原生支持 IPNS
-        pinning: false,    // Iroh 使用 tags / 作者证书系统
-        gc: true,          // Iroh 自动 GC
+        ipns: false,    // Iroh 使用内容寻址，不原生支持 IPNS
+        pinning: false, // Iroh 使用 tags / 作者证书系统
+        gc: true,       // Iroh 自动 GC
         pubsub: false,
-        mfs: false,        // Iroh 使用文档系统
-        bitswap: false,    // Iroh 使用自己的传输协议
-        cid_version: 1,    // BLAKE3 内容标识，语义上对应 CIDv1
+        mfs: false,     // Iroh 使用文档系统
+        bitswap: false, // Iroh 使用自己的传输协议
+        cid_version: 1, // BLAKE3 内容标识，语义上对应 CIDv1
     }
 }
 
@@ -81,13 +80,13 @@ fn iroh_capabilities() -> BackendCapabilities {
 #[cfg(feature = "iroh-backend")]
 mod real {
     use super::*;
+    use iroh::protocol::Router;
+    use iroh::{Endpoint, EndpointAddr, SecretKey};
+    use iroh_blobs::store::fs::FsStore;
+    use iroh_blobs::{BlobsProtocol, Hash};
     use std::path::PathBuf;
     use std::sync::Arc;
     use tokio::sync::RwLock;
-    use iroh::{Endpoint, EndpointAddr, SecretKey};
-    use iroh::protocol::Router;
-    use iroh_blobs::store::fs::FsStore;
-    use iroh_blobs::{BlobsProtocol, Hash};
 
     /// 已启动的网络/serving 栈（惰性构建，可被 `shutdown` 清空后重建）
     #[derive(Clone)]
@@ -210,8 +209,13 @@ mod real {
 
             // 入站连接事件：给 BlobsProtocol 传 EventSender，后台任务把「连来的对端」
             // 登记为 inbound（别人来我这取内容也可观测）。
-            use iroh_blobs::provider::events::{ConnectMode, EventMask, EventSender, ProviderMessage};
-            let mask = EventMask { connected: ConnectMode::Notify, ..EventMask::DEFAULT };
+            use iroh_blobs::provider::events::{
+                ConnectMode, EventMask, EventSender, ProviderMessage,
+            };
+            let mask = EventMask {
+                connected: ConnectMode::Notify,
+                ..EventMask::DEFAULT
+            };
             let (events, mut event_rx) = EventSender::channel(64, mask);
 
             let blobs = BlobsProtocol::new(&store, Some(events));
@@ -233,8 +237,16 @@ mod real {
                 }
             });
 
-            tracing::info!("iroh node serving: {} (data_dir={:?})", node_id, self.data_dir);
-            let net = IrohNet { endpoint, router, node_id };
+            tracing::info!(
+                "iroh node serving: {} (data_dir={:?})",
+                node_id,
+                self.data_dir
+            );
+            let net = IrohNet {
+                endpoint,
+                router,
+                node_id,
+            };
             *guard = Some(net.clone());
             Ok(net)
         }
@@ -247,7 +259,11 @@ mod real {
         /// 从远端节点按内容 hash 拉取 blob（serving/互传的接收侧）
         ///
         /// 接收侧：连接 `addr` → 走 blobs 协议按 hash 拉取 → 落入本地 store → 读回字节。
-        pub async fn fetch_from(&self, addr: EndpointAddr, cid: &str) -> Result<Vec<u8>, BackendError> {
+        pub async fn fetch_from(
+            &self,
+            addr: EndpointAddr,
+            cid: &str,
+        ) -> Result<Vec<u8>, BackendError> {
             let hash = Self::parse_hash(cid)?;
             let net = self.net().await?;
             let store = self.store().await?;
@@ -281,16 +297,18 @@ mod real {
             let hash = Self::parse_hash(cid)?;
             let net = self.net().await?; // 确保 Router/serving 已就绪且地址可用
             let addr = net.endpoint.addr();
-            let ticket = iroh_blobs::ticket::BlobTicket::new(addr, hash, iroh_blobs::BlobFormat::Raw);
+            let ticket =
+                iroh_blobs::ticket::BlobTicket::new(addr, hash, iroh_blobs::BlobFormat::Raw);
             Ok(ticket.to_string())
         }
 
         /// 用 ticket 收取内容：解析出「提供者地址 + 内容 hash」→ 连接并按 hash 拉取。
         pub async fn fetch_ticket(&self, ticket_str: &str) -> Result<Vec<u8>, BackendError> {
-            let ticket: iroh_blobs::ticket::BlobTicket = ticket_str.trim().parse().map_err(|e| BackendError {
-                kind: crate::backend_trait::BackendErrorKind::InvalidArgument,
-                message: format!("invalid blob ticket: {e}"),
-            })?;
+            let ticket: iroh_blobs::ticket::BlobTicket =
+                ticket_str.trim().parse().map_err(|e| BackendError {
+                    kind: crate::backend_trait::BackendErrorKind::InvalidArgument,
+                    message: format!("invalid blob ticket: {e}"),
+                })?;
             let addr = ticket.addr().clone();
             let cid = ticket.hash().to_string();
             self.fetch_from(addr, &cid).await
@@ -334,11 +352,9 @@ mod real {
             let hash = Self::parse_hash(cid)?;
             let store = self.store().await?;
             let name = format!("keep/{hash}");
-            store
-                .tags()
-                .delete(name.as_bytes())
-                .await
-                .map_err(|e| BackendError::internal(format!("iroh unkeep(delete tag) failed: {e}")))?;
+            store.tags().delete(name.as_bytes()).await.map_err(|e| {
+                BackendError::internal(format!("iroh unkeep(delete tag) failed: {e}"))
+            })?;
             Ok(())
         }
 
@@ -372,8 +388,7 @@ mod real {
             //   - FromStr 亦兼收 52 位 base32（外部粘贴的 ticket 里可能是此形态）
             // 非这两种形态（如 Kubo 的 Qm.../baf... CID）直接判无效，绝不喂给会 panic 的解析器。
             let is_hex = c.len() == 64 && c.bytes().all(|b| b.is_ascii_hexdigit());
-            let is_b32 = c.len() == 52
-                && c.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'));
+            let is_b32 = c.len() == 52 && c.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'));
             if !(is_hex || is_b32) {
                 return Err(invalid(format!("not an iroh blob hash: '{cid}'")));
             }
@@ -384,8 +399,12 @@ mod real {
 
     #[async_trait]
     impl Backend for IrohBackend {
-        fn backend_type(&self) -> BackendType { BackendType::Iroh }
-        fn capabilities(&self) -> BackendCapabilities { iroh_capabilities() }
+        fn backend_type(&self) -> BackendType {
+            BackendType::Iroh
+        }
+        fn capabilities(&self) -> BackendCapabilities {
+            iroh_capabilities()
+        }
 
         async fn is_available(&self) -> bool {
             // 以 blob 存储可打开为准（add/cat 的前提），不依赖网络端点
@@ -403,7 +422,10 @@ mod real {
         }
 
         async fn version(&self) -> Result<String, BackendError> {
-            Ok(format!("iroh 1.x + iroh-blobs (native, {})", env!("CARGO_PKG_VERSION")))
+            Ok(format!(
+                "iroh 1.x + iroh-blobs (native, {})",
+                env!("CARGO_PKG_VERSION")
+            ))
         }
 
         async fn repo_stat(&self) -> Result<RepoInfo, BackendError> {
@@ -412,16 +434,25 @@ mod real {
                 .or_else(|_| std::fs::metadata(&self.data_dir))
                 .map(|m| m.len())
                 .unwrap_or(0);
-            Ok(RepoInfo { num_objects: 0, repo_size: size, version: "iroh-blobs".to_string() })
+            Ok(RepoInfo {
+                num_objects: 0,
+                repo_size: size,
+                version: "iroh-blobs".to_string(),
+            })
         }
 
         async fn repo_gc(&self) -> Result<(), BackendError> {
-            Err(BackendError::unsupported("Iroh GC is automatic; no manual trigger"))
+            Err(BackendError::unsupported(
+                "Iroh GC is automatic; no manual trigger",
+            ))
         }
 
         async fn add_file(&self, path: &Path) -> Result<AddOutput, BackendError> {
             let store = self.store().await?;
-            let size = tokio::fs::metadata(path).await.map(|m| m.len()).unwrap_or(0);
+            let size = tokio::fs::metadata(path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0);
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -434,7 +465,11 @@ mod real {
                 .await
                 .map_err(|e| BackendError::internal(format!("iroh add_path failed: {e}")))?;
 
-            Ok(AddOutput { cid: tag.hash.to_string(), size, name })
+            Ok(AddOutput {
+                cid: tag.hash.to_string(),
+                size,
+                name,
+            })
         }
 
         async fn cat(&self, cid: &str) -> Result<Vec<u8>, BackendError> {
@@ -480,19 +515,30 @@ mod real {
         }
 
         async fn bandwidth_stats(&self) -> Result<BandwidthInfo, BackendError> {
-            Err(BackendError::unsupported("Iroh bandwidth stats not wired yet"))
+            Err(BackendError::unsupported(
+                "Iroh bandwidth stats not wired yet",
+            ))
         }
         async fn bitswap_stats(&self) -> Result<BitswapInfo, BackendError> {
-            Err(BackendError::unsupported("Iroh does not use Bitswap protocol"))
+            Err(BackendError::unsupported(
+                "Iroh does not use Bitswap protocol",
+            ))
         }
 
         async fn name_publish(
-            &self, _cid: &str, _key: &str, _lifetime: &str,
+            &self,
+            _cid: &str,
+            _key: &str,
+            _lifetime: &str,
         ) -> Result<IpnsOutput, BackendError> {
-            Err(BackendError::unsupported("Iroh does not support IPNS (use content addressing)"))
+            Err(BackendError::unsupported(
+                "Iroh does not support IPNS (use content addressing)",
+            ))
         }
         async fn name_resolve(&self, _name: &str) -> Result<IpnsPath, BackendError> {
-            Err(BackendError::unsupported("Iroh does not support IPNS (use content addressing)"))
+            Err(BackendError::unsupported(
+                "Iroh does not support IPNS (use content addressing)",
+            ))
         }
 
         async fn shutdown(&self) -> Result<(), BackendError> {
@@ -505,7 +551,9 @@ mod real {
                 }
             }
             let _ = self.store.write().await.take();
-            tracing::info!("iroh node shut down (net+store cleared; re-init from disk on next use)");
+            tracing::info!(
+                "iroh node shut down (net+store cleared; re-init from disk on next use)"
+            );
             Ok(())
         }
     }
@@ -533,7 +581,10 @@ pub struct IrohBackend {
 impl IrohBackend {
     pub fn new(data_dir: std::path::PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&data_dir);
-        Self { data_dir, initialized: true }
+        Self {
+            data_dir,
+            initialized: true,
+        }
     }
 
     fn local_peer_id(&self) -> String {
@@ -542,12 +593,16 @@ impl IrohBackend {
 
     /// stub：需启用 iroh-backend feature 才能生成分享 ticket
     pub async fn share_ticket(&self, _cid: &str) -> Result<String, BackendError> {
-        Err(BackendError::unsupported("iroh share requires the iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "iroh share requires the iroh-backend feature",
+        ))
     }
 
     /// stub：需启用 iroh-backend feature 才能用 ticket 收取
     pub async fn fetch_ticket(&self, _ticket: &str) -> Result<Vec<u8>, BackendError> {
-        Err(BackendError::unsupported("iroh fetch requires the iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "iroh fetch requires the iroh-backend feature",
+        ))
     }
 
     /// stub：无本地 iroh 存储，恒为 false（Auto 路由回退到 Kubo/启发式）
@@ -557,27 +612,39 @@ impl IrohBackend {
 
     /// stub：需启用 iroh-backend feature 才能 keep
     pub async fn keep(&self, _cid: &str) -> Result<(), BackendError> {
-        Err(BackendError::unsupported("iroh keep requires the iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "iroh keep requires the iroh-backend feature",
+        ))
     }
 
     /// stub：需启用 iroh-backend feature 才能 unkeep
     pub async fn unkeep(&self, _cid: &str) -> Result<(), BackendError> {
-        Err(BackendError::unsupported("iroh unkeep requires the iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "iroh unkeep requires the iroh-backend feature",
+        ))
     }
 
     /// stub：无真实 iroh 存储 → 内容计数不可用
     pub async fn content_count(&self) -> Result<u64, BackendError> {
-        Err(BackendError::unsupported("iroh content_count requires the iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "iroh content_count requires the iroh-backend feature",
+        ))
     }
 }
 
 #[cfg(not(feature = "iroh-backend"))]
 #[async_trait]
 impl Backend for IrohBackend {
-    fn backend_type(&self) -> BackendType { BackendType::Iroh }
-    fn capabilities(&self) -> BackendCapabilities { iroh_capabilities() }
+    fn backend_type(&self) -> BackendType {
+        BackendType::Iroh
+    }
+    fn capabilities(&self) -> BackendCapabilities {
+        iroh_capabilities()
+    }
 
-    async fn is_available(&self) -> bool { self.initialized }
+    async fn is_available(&self) -> bool {
+        self.initialized
+    }
 
     async fn node_info(&self) -> Result<NodeInfo, BackendError> {
         Ok(NodeInfo {
@@ -593,22 +660,36 @@ impl Backend for IrohBackend {
     }
 
     async fn repo_stat(&self) -> Result<RepoInfo, BackendError> {
-        let size = std::fs::metadata(&self.data_dir).map(|m| m.len()).unwrap_or(0);
-        Ok(RepoInfo { num_objects: 0, repo_size: size, version: "iroh".to_string() })
+        let size = std::fs::metadata(&self.data_dir)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        Ok(RepoInfo {
+            num_objects: 0,
+            repo_size: size,
+            version: "iroh".to_string(),
+        })
     }
 
     async fn repo_gc(&self) -> Result<(), BackendError> {
-        Err(BackendError::unsupported("Iroh GC is automatic; no manual trigger available"))
+        Err(BackendError::unsupported(
+            "Iroh GC is automatic; no manual trigger available",
+        ))
     }
 
     async fn add_file(&self, _path: &Path) -> Result<AddOutput, BackendError> {
-        Err(BackendError::unsupported("Iroh add_file requires iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "Iroh add_file requires iroh-backend feature",
+        ))
     }
     async fn cat(&self, _cid: &str) -> Result<Vec<u8>, BackendError> {
-        Err(BackendError::unsupported("Iroh cat requires iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "Iroh cat requires iroh-backend feature",
+        ))
     }
     async fn file_size(&self, _cid: &str) -> Result<u64, BackendError> {
-        Err(BackendError::unsupported("Iroh file_size requires iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "Iroh file_size requires iroh-backend feature",
+        ))
     }
 
     async fn pin_ls(&self) -> Result<Vec<PinEntry>, BackendError> {
@@ -626,19 +707,30 @@ impl Backend for IrohBackend {
     }
 
     async fn bandwidth_stats(&self) -> Result<BandwidthInfo, BackendError> {
-        Err(BackendError::unsupported("Iroh bandwidth stats require iroh-backend feature"))
+        Err(BackendError::unsupported(
+            "Iroh bandwidth stats require iroh-backend feature",
+        ))
     }
     async fn bitswap_stats(&self) -> Result<BitswapInfo, BackendError> {
-        Err(BackendError::unsupported("Iroh does not use Bitswap protocol"))
+        Err(BackendError::unsupported(
+            "Iroh does not use Bitswap protocol",
+        ))
     }
 
     async fn name_publish(
-        &self, _cid: &str, _key: &str, _lifetime: &str,
+        &self,
+        _cid: &str,
+        _key: &str,
+        _lifetime: &str,
     ) -> Result<IpnsOutput, BackendError> {
-        Err(BackendError::unsupported("Iroh does not support IPNS publish (use content addressing)"))
+        Err(BackendError::unsupported(
+            "Iroh does not support IPNS publish (use content addressing)",
+        ))
     }
     async fn name_resolve(&self, _name: &str) -> Result<IpnsPath, BackendError> {
-        Err(BackendError::unsupported("Iroh does not support IPNS resolve (use content addressing)"))
+        Err(BackendError::unsupported(
+            "Iroh does not support IPNS resolve (use content addressing)",
+        ))
     }
 
     async fn shutdown(&self) -> Result<(), BackendError> {
@@ -702,7 +794,10 @@ mod real_tests {
         assert!(backend.is_available().await, "real iroh node should init");
         let info = backend.node_info().await.expect("node_info");
         assert!(!info.peer_id.is_empty(), "node_id should be non-empty");
-        assert_ne!(info.peer_id, "iroh:stub:12D3KooW", "should be a real identity, not stub");
+        assert_ne!(
+            info.peer_id, "iroh:stub:12D3KooW",
+            "should be a real identity, not stub"
+        );
     }
 
     /// 核心断言：本机 add → cat 往返 + BLAKE3 内容完整性
@@ -713,12 +808,14 @@ mod real_tests {
 
         // 写一个临时文件（含可辨识内容）
         let payload: Vec<u8> = (0..64_000u32).map(|i| (i % 251) as u8).collect();
-        let tmp = std::env::temp_dir()
-            .join(format!("iroh-roundtrip-{}.bin", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("iroh-roundtrip-{}.bin", std::process::id()));
         tokio::fs::write(&tmp, &payload).await.unwrap();
 
         // add → 得到 BLAKE3 hash
-        let added = backend.add_file(&tmp).await.expect("add_file should succeed");
+        let added = backend
+            .add_file(&tmp)
+            .await
+            .expect("add_file should succeed");
         assert!(!added.cid.is_empty());
         assert_eq!(added.size, payload.len() as u64);
 
@@ -728,7 +825,10 @@ mod real_tests {
 
         // 内容寻址自证：同一内容再 add 必得同一 hash（BLAKE3 完整性）
         let added2 = backend.add_file(&tmp).await.expect("re-add");
-        assert_eq!(added.cid, added2.cid, "same content must yield same BLAKE3 hash");
+        assert_eq!(
+            added.cid, added2.cid,
+            "same content must yield same BLAKE3 hash"
+        );
 
         let _ = tokio::fs::remove_file(&tmp).await;
     }
@@ -748,7 +848,10 @@ mod real_tests {
             b.node_info().await.expect("node_info #2").peer_id
         };
 
-        assert_eq!(id1, id2, "node identity must persist across restarts (data_dir/node.secret)");
+        assert_eq!(
+            id1, id2,
+            "node identity must persist across restarts (data_dir/node.secret)"
+        );
         assert!(!id1.is_empty());
     }
 
@@ -760,8 +863,7 @@ mod real_tests {
 
         // A 添加内容
         let payload: Vec<u8> = (0..40_000u32).map(|i| (i % 253) as u8).collect();
-        let tmp = std::env::temp_dir()
-            .join(format!("iroh-2node-{}.bin", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("iroh-2node-{}.bin", std::process::id()));
         tokio::fs::write(&tmp, &payload).await.unwrap();
         let added = node_a.add_file(&tmp).await.expect("A add_file");
 
@@ -777,17 +879,25 @@ mod real_tests {
         .expect("two-node fetch timed out")
         .expect("B fetch_from A");
 
-        assert_eq!(got, payload, "B must receive byte-identical content served by A");
+        assert_eq!(
+            got, payload,
+            "B must receive byte-identical content served by A"
+        );
 
         // B 本地也应能直接 cat（内容已落入 B 的 store）
-        let local = node_b.cat(&added.cid).await.expect("B local cat after fetch");
+        let local = node_b
+            .cat(&added.cid)
+            .await
+            .expect("B local cat after fetch");
         assert_eq!(local, payload);
 
         // swarm_peers（出站）：B 连接过 A 后，应在其对等节点列表里记录到 A
         let a_id = node_a.node_info().await.unwrap().peer_id;
         let peers = node_b.swarm_peers().await.expect("swarm_peers");
         assert!(
-            peers.iter().any(|p| p.peer_id == a_id && p.direction.as_deref() == Some("outbound")),
+            peers
+                .iter()
+                .any(|p| p.peer_id == a_id && p.direction.as_deref() == Some("outbound")),
             "B's swarm_peers should include A ({}) as outbound; got {:?}",
             a_id,
             peers
@@ -804,7 +914,11 @@ mod real_tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
-        assert!(a_has_b, "A should track inbound peer B ({}) after serving it content", b_id);
+        assert!(
+            a_has_b,
+            "A should track inbound peer B ({}) after serving it content",
+            b_id
+        );
 
         let _ = tokio::fs::remove_file(&tmp).await;
     }
@@ -816,13 +930,15 @@ mod real_tests {
         let node_b = IrohBackend::new(unique_dir("ticketB"));
 
         let payload: Vec<u8> = (0..24_000u32).map(|i| (i % 249) as u8).collect();
-        let tmp = std::env::temp_dir()
-            .join(format!("iroh-ticket-{}.bin", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("iroh-ticket-{}.bin", std::process::id()));
         tokio::fs::write(&tmp, &payload).await.unwrap();
 
         // A 添加 → 生成可分享 ticket
         let added = node_a.add_file(&tmp).await.expect("A add");
-        let ticket = node_a.share_ticket(&added.cid).await.expect("A share_ticket");
+        let ticket = node_a
+            .share_ticket(&added.cid)
+            .await
+            .expect("A share_ticket");
         assert!(!ticket.is_empty(), "ticket string should be non-empty");
 
         // B 仅凭 ticket 字符串即可收取（限时）
@@ -834,7 +950,10 @@ mod real_tests {
         .expect("ticket fetch timed out")
         .expect("B fetch_ticket");
 
-        assert_eq!(got, payload, "B must receive byte-identical content via ticket");
+        assert_eq!(
+            got, payload,
+            "B must receive byte-identical content via ticket"
+        );
 
         let _ = tokio::fs::remove_file(&tmp).await;
     }
@@ -857,8 +976,15 @@ mod real_tests {
         backend.shutdown().await.expect("shutdown");
 
         // 关闭后：node_info 自动重建，身份持久（同一 node_id）
-        let id2 = backend.node_info().await.expect("node_info 2 (reinit)").peer_id;
-        assert_eq!(id1, id2, "node identity must persist across shutdown/restart");
+        let id2 = backend
+            .node_info()
+            .await
+            .expect("node_info 2 (reinit)")
+            .peer_id;
+        assert_eq!(
+            id1, id2,
+            "node identity must persist across shutdown/restart"
+        );
 
         // 内容仍在（store 跨 shutdown 保留）
         let got = backend.cat(&added.cid).await.expect("cat after restart");
@@ -900,7 +1026,10 @@ mod real_tests {
         backend.keep(&added.cid).await.expect("keep");
 
         let c1 = backend.content_count().await.expect("count 1");
-        assert!(c1 > c0, "content count should grow after add+keep (c0={c0}, c1={c1})");
+        assert!(
+            c1 > c0,
+            "content count should grow after add+keep (c0={c0}, c1={c1})"
+        );
 
         let _ = tokio::fs::remove_file(&tmp).await;
     }

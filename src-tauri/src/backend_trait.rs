@@ -52,19 +52,34 @@ pub enum BackendErrorKind {
 
 impl BackendError {
     pub fn unavailable(msg: impl Into<String>) -> Self {
-        Self { kind: BackendErrorKind::Unavailable, message: msg.into() }
+        Self {
+            kind: BackendErrorKind::Unavailable,
+            message: msg.into(),
+        }
     }
     pub fn not_found(msg: impl Into<String>) -> Self {
-        Self { kind: BackendErrorKind::NotFound, message: msg.into() }
+        Self {
+            kind: BackendErrorKind::NotFound,
+            message: msg.into(),
+        }
     }
     pub fn unsupported(msg: impl Into<String>) -> Self {
-        Self { kind: BackendErrorKind::Unsupported, message: msg.into() }
+        Self {
+            kind: BackendErrorKind::Unsupported,
+            message: msg.into(),
+        }
     }
     pub fn internal(msg: impl Into<String>) -> Self {
-        Self { kind: BackendErrorKind::Internal, message: msg.into() }
+        Self {
+            kind: BackendErrorKind::Internal,
+            message: msg.into(),
+        }
     }
     pub fn network(msg: impl Into<String>) -> Self {
-        Self { kind: BackendErrorKind::Network, message: msg.into() }
+        Self {
+            kind: BackendErrorKind::Network,
+            message: msg.into(),
+        }
     }
 }
 
@@ -292,49 +307,105 @@ mod tests {
 
     #[async_trait]
     impl Backend for StubBackend {
-        fn backend_type(&self) -> BackendType { BackendType::Kubo }
+        fn backend_type(&self) -> BackendType {
+            BackendType::Kubo
+        }
         fn capabilities(&self) -> BackendCapabilities {
             BackendCapabilities {
                 backend_type: BackendType::Kubo,
-                ipns: true, pinning: true, gc: true,
-                pubsub: false, mfs: false, bitswap: true,
+                ipns: true,
+                pinning: true,
+                gc: true,
+                pubsub: false,
+                mfs: false,
+                bitswap: true,
                 cid_version: 1,
             }
         }
-        async fn is_available(&self) -> bool { self.available }
+        async fn is_available(&self) -> bool {
+            self.available
+        }
         async fn node_info(&self) -> Result<NodeInfo, BackendError> {
             Ok(NodeInfo {
-                peer_id: "stub".into(), agent_version: "test".into(),
-                protocol_version: "test".into(), addresses: vec![],
+                peer_id: "stub".into(),
+                agent_version: "test".into(),
+                protocol_version: "test".into(),
+                addresses: vec![],
             })
         }
-        async fn version(&self) -> Result<String, BackendError> { Ok("stub-0.1".into()) }
+        async fn version(&self) -> Result<String, BackendError> {
+            Ok("stub-0.1".into())
+        }
         async fn repo_stat(&self) -> Result<RepoInfo, BackendError> {
-            Ok(RepoInfo { num_objects: 0, repo_size: 0, version: "stub".into() })
+            Ok(RepoInfo {
+                num_objects: 0,
+                repo_size: 0,
+                version: "stub".into(),
+            })
         }
-        async fn repo_gc(&self) -> Result<(), BackendError> { Ok(()) }
+        async fn repo_gc(&self) -> Result<(), BackendError> {
+            Ok(())
+        }
         async fn add_file(&self, _path: &Path) -> Result<AddOutput, BackendError> {
-            Ok(AddOutput { cid: "QmStub".into(), size: 0, name: "stub".into() })
+            Ok(AddOutput {
+                cid: "QmStub".into(),
+                size: 0,
+                name: "stub".into(),
+            })
         }
-        async fn cat(&self, _cid: &str) -> Result<Vec<u8>, BackendError> { Ok(vec![]) }
-        async fn file_size(&self, _cid: &str) -> Result<u64, BackendError> { Ok(0) }
-        async fn pin_ls(&self) -> Result<Vec<PinEntry>, BackendError> { Ok(vec![]) }
-        async fn pin_add(&self, _cid: &str) -> Result<(), BackendError> { Ok(()) }
-        async fn pin_rm(&self, _cid: &str) -> Result<(), BackendError> { Ok(()) }
-        async fn swarm_peers(&self) -> Result<Vec<PeerInfo>, BackendError> { Ok(vec![]) }
+        async fn cat(&self, _cid: &str) -> Result<Vec<u8>, BackendError> {
+            Ok(vec![])
+        }
+        async fn file_size(&self, _cid: &str) -> Result<u64, BackendError> {
+            Ok(0)
+        }
+        async fn pin_ls(&self) -> Result<Vec<PinEntry>, BackendError> {
+            Ok(vec![])
+        }
+        async fn pin_add(&self, _cid: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn pin_rm(&self, _cid: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn swarm_peers(&self) -> Result<Vec<PeerInfo>, BackendError> {
+            Ok(vec![])
+        }
         async fn bandwidth_stats(&self) -> Result<BandwidthInfo, BackendError> {
-            Ok(BandwidthInfo { total_in: 0, total_out: 0, rate_in: 0.0, rate_out: 0.0 })
+            Ok(BandwidthInfo {
+                total_in: 0,
+                total_out: 0,
+                rate_in: 0.0,
+                rate_out: 0.0,
+            })
         }
         async fn bitswap_stats(&self) -> Result<BitswapInfo, BackendError> {
-            Ok(BitswapInfo { blocks_received: 0, blocks_sent: 0, data_received: 0, data_sent: 0 })
+            Ok(BitswapInfo {
+                blocks_received: 0,
+                blocks_sent: 0,
+                data_received: 0,
+                data_sent: 0,
+            })
         }
-        async fn name_publish(&self, _cid: &str, _key: &str, _lt: &str) -> Result<IpnsOutput, BackendError> {
-            Ok(IpnsOutput { name: "stub".into(), value: "stub".into() })
+        async fn name_publish(
+            &self,
+            _cid: &str,
+            _key: &str,
+            _lt: &str,
+        ) -> Result<IpnsOutput, BackendError> {
+            Ok(IpnsOutput {
+                name: "stub".into(),
+                value: "stub".into(),
+            })
         }
         async fn name_resolve(&self, _name: &str) -> Result<IpnsPath, BackendError> {
-            Ok(IpnsPath { path: "/ipfs/QmStub".into() })
+            Ok(IpnsPath {
+                path: "/ipfs/QmStub".into(),
+            })
         }
-        async fn shutdown(&self) -> Result<(), BackendError> { Ok(()) }
+        async fn shutdown(&self) -> Result<(), BackendError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]

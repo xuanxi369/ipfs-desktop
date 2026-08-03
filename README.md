@@ -256,6 +256,16 @@ ipfs-desktop-rust/
 
 ---
 
+---
+
+## 贡献者--对"去中心化"的先驱者们以及对人类的自由意志致以最崇高的敬意
+
+<a href="https://github.com/xuanxi369/IPFS-Desktop-Rust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust" />
+</a>
+
+---
+
 ## License
 
 MIT

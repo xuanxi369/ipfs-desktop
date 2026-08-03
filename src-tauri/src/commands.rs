@@ -1,22 +1,19 @@
-use tauri::State;
-use tauri::Emitter;
-use crate::state::AppState;
+use crate::backend_trait::{Backend, BackendType};
 use crate::config::AppConfig;
-use crate::types::DaemonStatus;
 use crate::daemon::{
-    PinList, PinAddResult, PinRmResult,
-    BandwidthStats, BitswapStats, NodeId, RepoStats, SwarmPeers,
-    IpfsApiClient,
+    BandwidthStats, BitswapStats, IpfsApiClient, NodeId, PinAddResult, PinList, PinRmResult,
+    RepoStats, SwarmPeers,
 };
 use crate::error::DaemonError;
-use crate::backend_trait::{Backend, BackendType};
+use crate::state::AppState;
+use crate::types::DaemonStatus;
 use serde::Serialize;
+use tauri::Emitter;
+use tauri::State;
 
 /// 获取守护进程状态
 #[tauri::command]
-pub async fn get_daemon_status(
-    state: State<'_, AppState>
-) -> Result<DaemonStatus, DaemonError> {
+pub async fn get_daemon_status(state: State<'_, AppState>) -> Result<DaemonStatus, DaemonError> {
     Ok(state.get_daemon_status().await)
 }
 
@@ -29,7 +26,10 @@ pub async fn start_daemon(
     let current_status = state.get_daemon_status().await;
 
     // 检查当前状态
-    if !matches!(current_status, DaemonStatus::Stopped | DaemonStatus::Failed { .. }) {
+    if !matches!(
+        current_status,
+        DaemonStatus::Stopped | DaemonStatus::Failed { .. }
+    ) {
         return Err(DaemonError::InvalidState);
     }
 
@@ -38,7 +38,8 @@ pub async fn start_daemon(
 
     // 更新状态为启动中
     state.set_daemon_status(DaemonStatus::Starting).await;
-    app_handle.emit("daemon-status-changed", &DaemonStatus::Starting)
+    app_handle
+        .emit("daemon-status-changed", &DaemonStatus::Starting)
         .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
 
     tracing::info!("Starting IPFS daemon...");
@@ -70,7 +71,8 @@ pub async fn stop_daemon(
     state.set_daemon_status(DaemonStatus::Stopping).await;
 
     // 发送事件到前端
-    app_handle.emit("daemon-status-changed", &DaemonStatus::Stopping)
+    app_handle
+        .emit("daemon-status-changed", &DaemonStatus::Stopping)
         .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
 
     tracing::info!("Stopping IPFS daemon...");
@@ -83,7 +85,8 @@ pub async fn stop_daemon(
                 state.set_daemon_status(DaemonStatus::Stopped).await;
                 state.set_daemon_controller(None).await;
 
-                app_handle.emit("daemon-status-changed", &DaemonStatus::Stopped)
+                app_handle
+                    .emit("daemon-status-changed", &DaemonStatus::Stopped)
                     .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
 
                 Ok(())
@@ -91,8 +94,13 @@ pub async fn stop_daemon(
             Err(e) => {
                 let err_str = e.to_string();
                 tracing::error!("Failed to stop daemon: {}", err_str);
-                state.set_daemon_status(DaemonStatus::Failed { error: err_str.clone() }).await;
-                app_handle.emit("daemon-status-changed", &state.get_daemon_status().await)
+                state
+                    .set_daemon_status(DaemonStatus::Failed {
+                        error: err_str.clone(),
+                    })
+                    .await;
+                app_handle
+                    .emit("daemon-status-changed", &state.get_daemon_status().await)
                     .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
                 Err(e)
             }
@@ -100,7 +108,8 @@ pub async fn stop_daemon(
     } else {
         // 没有控制器，直接设置为已停止
         state.set_daemon_status(DaemonStatus::Stopped).await;
-        app_handle.emit("daemon-status-changed", &DaemonStatus::Stopped)
+        app_handle
+            .emit("daemon-status-changed", &DaemonStatus::Stopped)
             .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
         Ok(())
     }
@@ -133,26 +142,33 @@ pub async fn restart_daemon(
                             api_addr: config.api_addr.clone(),
                         };
                         state.set_daemon_status(status.clone()).await;
-                        app_handle.emit("daemon-status-changed", &status)
+                        app_handle
+                            .emit("daemon-status-changed", &status)
                             .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
                         return Ok(());
                     }
                 }
-                state.set_daemon_status(DaemonStatus::Running {
-                    pid: controller.get_pid().await.unwrap_or(0),
-                    peer_id: "unknown".to_string(),
-                    api_addr: config.api_addr.clone(),
-                }).await;
+                state
+                    .set_daemon_status(DaemonStatus::Running {
+                        pid: controller.get_pid().await.unwrap_or(0),
+                        peer_id: "unknown".to_string(),
+                        api_addr: config.api_addr.clone(),
+                    })
+                    .await;
                 let current = state.get_daemon_status().await;
-                app_handle.emit("daemon-status-changed", &current)
+                app_handle
+                    .emit("daemon-status-changed", &current)
                     .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
                 Ok(())
             }
             Err(e) => {
                 let err_str = e.to_string();
-                let failed = DaemonStatus::Failed { error: err_str.clone() };
+                let failed = DaemonStatus::Failed {
+                    error: err_str.clone(),
+                };
                 state.set_daemon_status(failed.clone()).await;
-                app_handle.emit("daemon-status-changed", &failed)
+                app_handle
+                    .emit("daemon-status-changed", &failed)
                     .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
                 Err(e)
             }
@@ -180,9 +196,7 @@ pub async fn restart_daemon(
 
 /// 获取配置
 #[tauri::command]
-pub async fn get_config(
-    state: State<'_, AppState>
-) -> Result<AppConfig, DaemonError> {
+pub async fn get_config(state: State<'_, AppState>) -> Result<AppConfig, DaemonError> {
     Ok(state.get_config().await)
 }
 
@@ -193,12 +207,10 @@ pub async fn update_config(
     new_config: AppConfig,
 ) -> Result<(), DaemonError> {
     // 验证配置
-    new_config.validate()
-        .map_err(DaemonError::ConfigError)?;
+    new_config.validate().map_err(DaemonError::ConfigError)?;
 
     // 保存配置到磁盘
-    new_config.save()
-        .map_err(DaemonError::ConfigError)?;
+    new_config.save().map_err(DaemonError::ConfigError)?;
 
     // 更新状态
     state.update_config(new_config.clone()).await;
@@ -210,9 +222,7 @@ pub async fn update_config(
 
 /// 获取节点 ID（用于测试 API 连接）
 #[tauri::command]
-pub async fn get_node_id(
-    state: State<'_, AppState>,
-) -> Result<String, DaemonError> {
+pub async fn get_node_id(state: State<'_, AppState>) -> Result<String, DaemonError> {
     tracing::info!("Getting node ID...");
 
     // 优先走智能代理（缓存 + 熔断 + 统计）
@@ -235,7 +245,9 @@ pub async fn get_node_id(
             }
         }
     } else {
-        Err(DaemonError::ApiError("API client not initialized".to_string()))
+        Err(DaemonError::ApiError(
+            "API client not initialized".to_string(),
+        ))
     }
 }
 
@@ -244,9 +256,7 @@ pub async fn get_node_id(
 /// 在系统默认浏览器中打开 IPFS 自带的 WebUI。
 /// 需要守护进程处于运行状态。
 #[tauri::command]
-pub async fn open_webui(
-    state: State<'_, AppState>,
-) -> Result<(), DaemonError> {
+pub async fn open_webui(state: State<'_, AppState>) -> Result<(), DaemonError> {
     let status = state.get_daemon_status().await;
     let config = state.get_config().await;
 
@@ -259,17 +269,13 @@ pub async fn open_webui(
                 .map_err(|e| DaemonError::ConfigError(format!("Failed to open browser: {}", e)))?;
             Ok(())
         }
-        _ => {
-            Err(DaemonError::InvalidState)
-        }
+        _ => Err(DaemonError::InvalidState),
     }
 }
 
 /// 获取 WebUI URL
 #[tauri::command]
-pub async fn get_webui_url(
-    state: State<'_, AppState>,
-) -> Result<String, DaemonError> {
+pub async fn get_webui_url(state: State<'_, AppState>) -> Result<String, DaemonError> {
     let config = state.get_config().await;
     Ok(format!("{}/webui", config.api_addr))
 }
@@ -285,7 +291,10 @@ pub async fn add_file(
 ) -> Result<crate::types::AddResult, DaemonError> {
     let path = std::path::PathBuf::from(&file_path);
     if !path.exists() {
-        return Err(DaemonError::IoError(format!("File not found: {}", file_path)));
+        return Err(DaemonError::IoError(format!(
+            "File not found: {}",
+            file_path
+        )));
     }
 
     // 写侧策略：显式偏好（"iroh"/"kubo"）优先——「本地/信任圈内容优先 iroh」由此表达；
@@ -298,16 +307,26 @@ pub async fn add_file(
     match state.backend_router.choose_for_add(prefer_backend).await {
         BackendType::Kubo => {
             // 保留原有 Kubo 路径：用实时 api_client（尊重运行时改地址）
-            let client = state.get_api_client().await
-                .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+            let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+                "API client not initialized".to_string(),
+            ))?;
             let res = client.add_file(&path).await?;
-            state.backend_router.record_origin(&res.hash, BackendType::Kubo).await;
+            state
+                .backend_router
+                .record_origin(&res.hash, BackendType::Kubo)
+                .await;
             Ok(res)
         }
         BackendType::Iroh => {
-            let out = state.iroh_backend.add_file(&path).await
+            let out = state
+                .iroh_backend
+                .add_file(&path)
+                .await
                 .map_err(|e| DaemonError::ApiError(e.to_string()))?;
-            state.backend_router.record_origin(&out.cid, BackendType::Iroh).await;
+            state
+                .backend_router
+                .record_origin(&out.cid, BackendType::Iroh)
+                .await;
             // 转为统一的 AddResult 形态，前端不感知后端差异
             Ok(crate::types::AddResult {
                 hash: out.cid,
@@ -324,27 +343,17 @@ pub async fn add_files(
     state: State<'_, AppState>,
     file_paths: Vec<String>,
 ) -> Result<Vec<crate::types::AddResult>, DaemonError> {
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
-
+    validate_path_count(&file_paths)?;
     let mut results = Vec::new();
     for file_path in &file_paths {
-        let path = std::path::PathBuf::from(file_path);
-        // 不静默跳过：缺失文件立即报错，与单文件 add_file 行为一致
-        if !path.exists() {
-            return Err(DaemonError::IoError(format!("File not found: {}", file_path)));
-        }
-        results.push(client.add_file(&path).await?);
+        results.push(add_file(state.clone(), file_path.clone(), None).await?);
     }
     Ok(results)
 }
 
 /// 设置开机自启
 #[tauri::command]
-pub async fn set_auto_launch(
-    state: State<'_, AppState>,
-    enable: bool,
-) -> Result<(), DaemonError> {
+pub async fn set_auto_launch(state: State<'_, AppState>, enable: bool) -> Result<(), DaemonError> {
     let app_path = std::env::current_exe()
         .map_err(|e| DaemonError::IoError(format!("Failed to get app path: {}", e)))?;
 
@@ -358,20 +367,21 @@ pub async fn set_auto_launch(
         .map_err(|e| DaemonError::ConfigError(format!("Failed to build auto-launch: {}", e)))?;
 
     if enable {
-        auto.enable()
-            .map_err(|e| DaemonError::ConfigError(format!("Failed to enable auto-launch: {}", e)))?;
+        auto.enable().map_err(|e| {
+            DaemonError::ConfigError(format!("Failed to enable auto-launch: {}", e))
+        })?;
         tracing::info!("Auto-launch enabled");
     } else {
-        auto.disable()
-            .map_err(|e| DaemonError::ConfigError(format!("Failed to disable auto-launch: {}", e)))?;
+        auto.disable().map_err(|e| {
+            DaemonError::ConfigError(format!("Failed to disable auto-launch: {}", e))
+        })?;
         tracing::info!("Auto-launch disabled");
     }
 
     // 更新配置
     let mut config = state.get_config().await;
     config.auto_launch = enable;
-    config.save()
-        .map_err(DaemonError::ConfigError)?;
+    config.save().map_err(DaemonError::ConfigError)?;
     state.update_config(config).await;
 
     Ok(())
@@ -379,9 +389,7 @@ pub async fn set_auto_launch(
 
 /// 获取开机自启状态
 #[tauri::command]
-pub async fn get_auto_launch(
-    state: State<'_, AppState>,
-) -> Result<bool, DaemonError> {
+pub async fn get_auto_launch(state: State<'_, AppState>) -> Result<bool, DaemonError> {
     Ok(state.get_config().await.auto_launch)
 }
 
@@ -393,10 +401,7 @@ pub async fn get_auto_launch(
 ///
 /// 返回文件的原始字节内容。对于文本文件，前端会转换为字符串显示。
 #[tauri::command]
-pub async fn cat_file(
-    state: State<'_, AppState>,
-    cid: String,
-) -> Result<Vec<u8>, DaemonError> {
+pub async fn cat_file(state: State<'_, AppState>, cid: String) -> Result<Vec<u8>, DaemonError> {
     tracing::info!("cat_file: {}", cid);
 
     // 双栈韧性：按路由顺序尝试（Auto 下主后端取不到 → 自动 fallback 到另一个）。
@@ -425,21 +430,29 @@ pub async fn cat_file(
         tracing::info!("cat_file network-fallback hit for {}", cid);
         return Ok(bytes);
     }
-    Err(first_err.unwrap_or_else(|| DaemonError::ApiError("no backend produced content".to_string())))
+    Err(first_err
+        .unwrap_or_else(|| DaemonError::ApiError("no backend produced content".to_string())))
 }
 
 /// 用指定后端读取内容（Kubo 腿用实时 api_client，尊重运行时改地址）
-async fn cat_via(state: &AppState, backend: BackendType, cid: &str) -> Result<Vec<u8>, DaemonError> {
+async fn cat_via(
+    state: &AppState,
+    backend: BackendType,
+    cid: &str,
+) -> Result<Vec<u8>, DaemonError> {
     match backend {
         BackendType::Kubo => {
-            let client = state.get_api_client().await
+            let client = state
+                .get_api_client()
+                .await
                 .ok_or_else(|| DaemonError::ApiError("API client not initialized".to_string()))?;
             client.cat(cid).await
         }
-        BackendType::Iroh => {
-            state.iroh_backend.cat(cid).await
-                .map_err(|e| DaemonError::ApiError(e.to_string()))
-        }
+        BackendType::Iroh => state
+            .iroh_backend
+            .cat(cid)
+            .await
+            .map_err(|e| DaemonError::ApiError(e.to_string())),
     }
 }
 
@@ -455,19 +468,45 @@ pub async fn download_file(
 ) -> Result<(), DaemonError> {
     tracing::info!("download_file: {} -> {}", cid, save_path);
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
-
     let output = std::path::PathBuf::from(&save_path);
-
-    // 真流式下载：边收边写目标文件句柄，不把整个文件累积在内存中
-    let written = client.cat_to_file(&cid, &output, |loaded, total| {
-        let _ = app_handle.emit("download-progress", &DownloadProgress {
-            cid: cid.clone(),
-            loaded,
-            total,
-        });
-    }).await?;
+    validate_cid(&cid)?;
+    validate_output_path(&output)?;
+    let backend = state.backend_router.choose_for_cid(&cid).await;
+    let written = match backend {
+        BackendType::Kubo => {
+            let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+                "API client not initialized".to_string(),
+            ))?;
+            client
+                .cat_to_file(&cid, &output, |loaded, total| {
+                    let _ = app_handle.emit(
+                        "download-progress",
+                        &DownloadProgress {
+                            cid: cid.clone(),
+                            loaded,
+                            total,
+                        },
+                    );
+                })
+                .await?
+        }
+        BackendType::Iroh => {
+            let bytes = cat_file(state.clone(), cid.clone()).await?;
+            tokio::fs::write(&output, &bytes)
+                .await
+                .map_err(|e| DaemonError::IoError(e.to_string()))?;
+            let size = bytes.len() as u64;
+            let _ = app_handle.emit(
+                "download-progress",
+                &DownloadProgress {
+                    cid: cid.clone(),
+                    loaded: size,
+                    total: Some(size),
+                },
+            );
+            size
+        }
+    };
 
     tracing::info!("Download complete: {} bytes -> {:?}", written, output);
     Ok(())
@@ -491,14 +530,21 @@ struct UploadProgress {
 
 /// 根据 CID 获取文件大小
 #[tauri::command]
-pub async fn get_file_size(
-    state: State<'_, AppState>,
-    cid: String,
-) -> Result<u64, DaemonError> {
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
-
-    client.file_size(&cid).await
+pub async fn get_file_size(state: State<'_, AppState>, cid: String) -> Result<u64, DaemonError> {
+    validate_cid(&cid)?;
+    match state.backend_router.choose_for_cid(&cid).await {
+        BackendType::Kubo => {
+            state
+                .get_api_client()
+                .await
+                .ok_or(DaemonError::ApiError(
+                    "API client not initialized".to_string(),
+                ))?
+                .file_size(&cid)
+                .await
+        }
+        BackendType::Iroh => Ok(state.iroh_backend.cat(&cid).await.map_err(iroh_err)?.len() as u64),
+    }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -507,9 +553,7 @@ pub async fn get_file_size(
 
 /// 获取 Pin 列表
 #[tauri::command]
-pub async fn get_pin_list(
-    state: State<'_, AppState>,
-) -> Result<PinList, DaemonError> {
+pub async fn get_pin_list(state: State<'_, AppState>) -> Result<PinList, DaemonError> {
     tracing::info!("get_pin_list");
 
     // 优先走智能代理（缓存 + 熔断 + 统计）
@@ -519,28 +563,29 @@ pub async fn get_pin_list(
         }
     }
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
 
     client.pin_ls().await
 }
 
 /// 添加 Pin
 #[tauri::command]
-pub async fn add_pin(
-    state: State<'_, AppState>,
-    cid: String,
-) -> Result<PinAddResult, DaemonError> {
+pub async fn add_pin(state: State<'_, AppState>, cid: String) -> Result<PinAddResult, DaemonError> {
     tracing::info!("add_pin: {}", cid);
 
     // 写命令同样经代理（统一熔断 + 指标）；代理不可用时回退到原始客户端
     let result = if let Some(proxy) = state.get_proxy_client().await {
         let cid_owned = cid.clone();
-        proxy.raw_call(|api| async move { api.pin_add(&cid_owned).await }).await
+        proxy
+            .raw_call(|api| async move { api.pin_add(&cid_owned).await })
+            .await
             .map_err(DaemonError::ApiError)?
     } else {
-        let client = state.get_api_client().await
-            .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+        let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+            "API client not initialized".to_string(),
+        ))?;
         client.pin_add(&cid).await?
     };
     // 写操作后让 pin 缓存失效，保证下次读取拿到最新列表
@@ -559,11 +604,14 @@ pub async fn remove_pin(
     // 写命令同样经代理（统一熔断 + 指标）；代理不可用时回退到原始客户端
     let result = if let Some(proxy) = state.get_proxy_client().await {
         let cid_owned = cid.clone();
-        proxy.raw_call(|api| async move { api.pin_rm(&cid_owned).await }).await
+        proxy
+            .raw_call(|api| async move { api.pin_rm(&cid_owned).await })
+            .await
             .map_err(DaemonError::ApiError)?
     } else {
-        let client = state.get_api_client().await
-            .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+        let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+            "API client not initialized".to_string(),
+        ))?;
         client.pin_rm(&cid).await?
     };
     // 写操作后让 pin 缓存失效，保证下次读取拿到最新列表
@@ -604,8 +652,9 @@ pub async fn get_dashboard_stats(
 ) -> Result<DashboardStats, DaemonError> {
     tracing::info!("get_dashboard_stats");
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
 
     // 真正并行获取所有数据（单个失败不影响其他）
     let (node_id, version, repo, peers, bandwidth, bitswap, pin_ls) = tokio::join!(
@@ -618,16 +667,31 @@ pub async fn get_dashboard_stats(
         client.pin_ls(),
     );
 
-    let node_id = node_id.map_err(|e| tracing::warn!("Failed to get node id: {}", e)).ok();
-    let version = version.map(|v| v.version)
-        .map_err(|e| tracing::warn!("Failed to get version: {}", e)).ok();
-    let repo = repo.map_err(|e| tracing::warn!("Failed to get repo stats: {}", e)).ok();
-    let peers = peers.map_err(|e| tracing::warn!("Failed to get peers: {}", e)).ok();
-    let bandwidth = bandwidth.map_err(|e| tracing::warn!("Failed to get bandwidth: {}", e)).ok();
-    let bitswap = bitswap.map_err(|e| tracing::warn!("Failed to get bitswap stats: {}", e)).ok();
+    let node_id = node_id
+        .map_err(|e| tracing::warn!("Failed to get node id: {}", e))
+        .ok();
+    let version = version
+        .map(|v| v.version)
+        .map_err(|e| tracing::warn!("Failed to get version: {}", e))
+        .ok();
+    let repo = repo
+        .map_err(|e| tracing::warn!("Failed to get repo stats: {}", e))
+        .ok();
+    let peers = peers
+        .map_err(|e| tracing::warn!("Failed to get peers: {}", e))
+        .ok();
+    let bandwidth = bandwidth
+        .map_err(|e| tracing::warn!("Failed to get bandwidth: {}", e))
+        .ok();
+    let bitswap = bitswap
+        .map_err(|e| tracing::warn!("Failed to get bitswap stats: {}", e))
+        .ok();
     let pin_count = match pin_ls {
         Ok(pins) => pins.pins.len(),
-        Err(e) => { tracing::warn!("Failed to get pin count: {}", e); 0 }
+        Err(e) => {
+            tracing::warn!("Failed to get pin count: {}", e);
+            0
+        }
     };
 
     Ok(DashboardStats {
@@ -652,43 +716,88 @@ pub async fn add_file_with_progress(
 ) -> Result<crate::types::AddResult, DaemonError> {
     let path = std::path::PathBuf::from(&file_path);
     if !path.exists() {
-        return Err(DaemonError::IoError(format!("File not found: {}", file_path)));
+        return Err(DaemonError::IoError(format!(
+            "File not found: {}",
+            file_path
+        )));
     }
 
-    let file_name = path.file_name()
+    let file_name = path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unnamed")
         .to_string();
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
 
     // 发送开始事件
-    let _ = app_handle.emit("upload-progress", &UploadProgress {
-        name: file_name.clone(),
-        loaded: 0,
-        total: 0,
-    });
+    let _ = app_handle.emit(
+        "upload-progress",
+        &UploadProgress {
+            name: file_name.clone(),
+            loaded: 0,
+            total: 0,
+        },
+    );
 
     // 真实分块进度：回调按字节累加，节流至每 512KB 或完成时推送一次
     let app = app_handle.clone();
     let name_cb = file_name.clone();
     let last_emit = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let result = client.add_file_streaming(&path, move |sent, total| {
-        use std::sync::atomic::Ordering;
-        let prev = last_emit.load(Ordering::Relaxed);
-        if sent == total || sent.saturating_sub(prev) >= 512 * 1024 {
-            last_emit.store(sent, Ordering::Relaxed);
-            let _ = app.emit("upload-progress", &UploadProgress {
-                name: name_cb.clone(),
-                loaded: sent,
-                total,
-            });
-        }
-    }).await?;
+    let result = client
+        .add_file_streaming(&path, move |sent, total| {
+            use std::sync::atomic::Ordering;
+            let prev = last_emit.load(Ordering::Relaxed);
+            if sent == total || sent.saturating_sub(prev) >= 512 * 1024 {
+                last_emit.store(sent, Ordering::Relaxed);
+                let _ = app.emit(
+                    "upload-progress",
+                    &UploadProgress {
+                        name: name_cb.clone(),
+                        loaded: sent,
+                        total,
+                    },
+                );
+            }
+        })
+        .await?;
 
     tracing::info!("Upload complete: {} -> {}", file_path, result.hash);
+    state
+        .content_index
+        .upsert(&crate::content_index::ContentRecord {
+            cid: result.hash.clone(),
+            name: result.name.clone(),
+            size: result.size.parse().unwrap_or(0),
+            backend: "Kubo".to_string(),
+            added_at: crate::state::now_secs() as i64,
+        })
+        .map_err(DaemonError::IoError)?;
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn list_content(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::content_index::ContentRecord>, DaemonError> {
+    state.content_index.list().map_err(DaemonError::IoError)
+}
+
+/// 仅删除本应用的列表记录；不会删除、unpin 或 GC 实际内容。
+#[tauri::command]
+pub async fn remove_content_record(
+    state: State<'_, AppState>,
+    cid: String,
+) -> Result<(), DaemonError> {
+    if cid.trim().is_empty() || cid.len() > 256 {
+        return Err(DaemonError::ApiError("invalid CID/hash format".to_string()));
+    }
+    state
+        .content_index
+        .remove(&cid)
+        .map_err(DaemonError::IoError)
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -706,15 +815,18 @@ pub async fn generate_key(
 ) -> Result<crate::keyring::KeyRecord, DaemonError> {
     tracing::info!("generate_key: {}", label);
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized (start the daemon first)".to_string()))?;
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized (start the daemon first)".to_string(),
+    ))?;
 
     // 由 Kubo 生成密钥，返回真实的 IPNS 名称（Id）
     let kg = client.key_gen(&label).await?;
     let record = crate::keyring::KeyRecord::from_kubo(kg.name, kg.id);
 
     // 保存公开记录（便于离线展示）
-    state.key_manager.save_record(&record)
+    state
+        .key_manager
+        .save_record(&record)
         .map_err(DaemonError::ConfigError)?;
 
     Ok(record)
@@ -728,7 +840,9 @@ pub async fn list_keys(
     // 优先查询 Kubo 的权威列表并同步本地记录
     if let Some(client) = state.get_api_client().await {
         if let Ok(kl) = client.key_list().await {
-            let records: Vec<crate::keyring::KeyRecord> = kl.keys.into_iter()
+            let records: Vec<crate::keyring::KeyRecord> = kl
+                .keys
+                .into_iter()
                 .map(|k| crate::keyring::KeyRecord::from_kubo(k.name, k.id))
                 .collect();
             state.key_manager.sync_from_kubo(&records);
@@ -737,23 +851,24 @@ pub async fn list_keys(
     }
 
     // 守护进程不可用 → 回退到本地记录
-    state.key_manager.list_records()
+    state
+        .key_manager
+        .list_records()
         .map_err(DaemonError::ConfigError)
 }
 
 /// 删除密钥（同时从 Kubo 密钥库和本地记录移除）
 #[tauri::command]
-pub async fn delete_key(
-    state: State<'_, AppState>,
-    label: String,
-) -> Result<(), DaemonError> {
+pub async fn delete_key(state: State<'_, AppState>, label: String) -> Result<(), DaemonError> {
     // 先删 Kubo 侧（"self" 等内置密钥可能失败，记录但不阻断本地清理）
     if let Some(client) = state.get_api_client().await {
         if let Err(e) = client.key_rm(&label).await {
             tracing::warn!("Kubo key/rm failed for '{}': {}", label, e);
         }
     }
-    state.key_manager.delete_record(&label)
+    state
+        .key_manager
+        .delete_record(&label)
         .map_err(DaemonError::ConfigError)
 }
 
@@ -764,14 +879,33 @@ pub async fn ipns_publish(
     cid: String,
     key_name: String,
     lifetime: Option<String>,
+    ipns_base: Option<String>,
+    allow_offline: Option<bool>,
 ) -> Result<crate::daemon::IpnsPublishResult, DaemonError> {
     let lifetime = lifetime.unwrap_or_else(|| "24h".to_string());
-    tracing::info!("ipns_publish: {} -> {}", cid, key_name);
+    let allow_offline = allow_offline.unwrap_or(false);
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    tracing::info!(
+        "ipns_publish: {} -> {} (lifetime: {}, offline: {})",
+        cid,
+        key_name,
+        lifetime,
+        allow_offline
+    );
 
-    client.name_publish(&cid, &key_name, &lifetime).await
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
+
+    client
+        .name_publish_full(
+            &cid,
+            &key_name,
+            &lifetime,
+            ipns_base.as_deref(),
+            allow_offline,
+        )
+        .await
 }
 
 /// IPNS 解析：将 IPNS 名称解析为 CID
@@ -782,8 +916,9 @@ pub async fn ipns_resolve(
 ) -> Result<crate::daemon::IpnsResolveResult, DaemonError> {
     tracing::info!("ipns_resolve: {}", name);
 
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
 
     client.name_resolve(&name).await
 }
@@ -803,7 +938,11 @@ pub async fn get_cached_dashboard(
         let peers = proxy.get_swarm_peers().await.ok();
         let bandwidth = proxy.get_bandwidth().await.ok();
         let bitswap = proxy.get_bitswap().await.ok();
-        let pin_count = proxy.get_pin_list().await.map(|p| p.pins.len()).unwrap_or(0);
+        let pin_count = proxy
+            .get_pin_list()
+            .await
+            .map(|p| p.pins.len())
+            .unwrap_or(0);
 
         return Ok(DashboardStats {
             node_id,
@@ -826,8 +965,9 @@ async fn get_dashboard_stats_inner(
     state: State<'_, AppState>,
     client: Option<IpfsApiClient>,
 ) -> Result<DashboardStats, DaemonError> {
-    let client = client
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    let client = client.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
 
     let node_id = match client.id().await {
         Ok(id) => {
@@ -835,7 +975,10 @@ async fn get_dashboard_stats_inner(
             state.cache.set_node_info(&json);
             Some(id)
         }
-        Err(e) => { tracing::warn!("Failed to get node id: {}", e); None }
+        Err(e) => {
+            tracing::warn!("Failed to get node id: {}", e);
+            None
+        }
     };
 
     let repo = match client.repo_stat().await {
@@ -844,7 +987,10 @@ async fn get_dashboard_stats_inner(
             state.cache.set_repo_stats(&json);
             Some(r)
         }
-        Err(e) => { tracing::warn!("Failed to get repo stats: {}", e); None }
+        Err(e) => {
+            tracing::warn!("Failed to get repo stats: {}", e);
+            None
+        }
     };
 
     let peers = match client.swarm_peers().await {
@@ -853,7 +999,10 @@ async fn get_dashboard_stats_inner(
             state.cache.set_peers(&json);
             Some(p)
         }
-        Err(e) => { tracing::warn!("Failed to get peers: {}", e); None }
+        Err(e) => {
+            tracing::warn!("Failed to get peers: {}", e);
+            None
+        }
     };
 
     let bandwidth = match client.stats_bw().await {
@@ -862,7 +1011,10 @@ async fn get_dashboard_stats_inner(
             state.cache.set_bandwidth(&json);
             Some(b)
         }
-        Err(e) => { tracing::warn!("Failed to get bandwidth: {}", e); None }
+        Err(e) => {
+            tracing::warn!("Failed to get bandwidth: {}", e);
+            None
+        }
     };
 
     let bitswap = match client.bitswap_stat().await {
@@ -871,12 +1023,18 @@ async fn get_dashboard_stats_inner(
             state.cache.set_bitswap(&json);
             Some(b)
         }
-        Err(e) => { tracing::warn!("Failed to get bitswap stats: {}", e); None }
+        Err(e) => {
+            tracing::warn!("Failed to get bitswap stats: {}", e);
+            None
+        }
     };
 
     let pin_count = match client.pin_ls().await {
         Ok(pins) => pins.pins.len(),
-        Err(e) => { tracing::warn!("Failed to get pin count: {}", e); 0 }
+        Err(e) => {
+            tracing::warn!("Failed to get pin count: {}", e);
+            0
+        }
     };
 
     Ok(DashboardStats {
@@ -902,7 +1060,9 @@ pub async fn get_proxy_stats(
     if let Some(proxy) = state.get_proxy_client().await {
         Ok(proxy.get_stats().await)
     } else {
-        Err(DaemonError::ApiError("Proxy client not initialized".to_string()))
+        Err(DaemonError::ApiError(
+            "Proxy client not initialized".to_string(),
+        ))
     }
 }
 
@@ -933,9 +1093,13 @@ pub async fn set_prefetch_hint(
 pub async fn get_offline_queue(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, DaemonError> {
-    let entries = state.offline_queue.list_all()
+    let entries = state
+        .offline_queue
+        .list_all()
         .map_err(DaemonError::ConfigError)?;
-    let count = state.offline_queue.len()
+    let count = state
+        .offline_queue
+        .len()
         .map_err(DaemonError::ConfigError)?;
 
     Ok(serde_json::json!({
@@ -954,8 +1118,9 @@ pub async fn get_offline_queue(
 pub async fn flush_offline_queue(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, DaemonError> {
-    let client = state.get_api_client().await
-        .ok_or(DaemonError::ApiError("API client not initialized".to_string()))?;
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
 
     let engine = crate::offline_queue::ReplayEngine::new(state.offline_queue.clone());
     let (success, failed) = engine.replay_all(&client).await;
@@ -990,8 +1155,11 @@ pub async fn set_bandwidth_config(
             .map_err(DaemonError::ConfigError)?;
     }
 
-    tracing::info!("Bandwidth config updated: {} conns / {} streams",
-        config.max_connections, config.max_streams);
+    tracing::info!(
+        "Bandwidth config updated: {} conns / {} streams",
+        config.max_connections,
+        config.max_streams
+    );
     Ok(())
 }
 
@@ -1000,7 +1168,9 @@ pub async fn set_bandwidth_config(
 pub async fn get_bandwidth_status(
     state: State<'_, AppState>,
 ) -> Result<crate::bandwidth::BandwidthStatus, DaemonError> {
-    let monitor = state.bandwidth_monitor.lock()
+    let monitor = state
+        .bandwidth_monitor
+        .lock()
         .map_err(|e| DaemonError::ConfigError(e.to_string()))?;
 
     Ok(crate::bandwidth::BandwidthStatus {
@@ -1028,7 +1198,9 @@ pub async fn add_file_safe(
                 .unwrap_or_default()
                 .as_secs(),
         };
-        let id = state.offline_queue.enqueue(op)
+        let id = state
+            .offline_queue
+            .enqueue(op)
             .map_err(DaemonError::ConfigError)?;
         tracing::info!("Daemon not running, queued file add as id={}", id);
         return Ok(serde_json::json!({
@@ -1052,9 +1224,7 @@ pub async fn add_file_safe(
 
 /// 获取当前活跃后端类型
 #[tauri::command]
-pub async fn get_active_backend(
-    state: State<'_, AppState>,
-) -> Result<String, DaemonError> {
+pub async fn get_active_backend(state: State<'_, AppState>) -> Result<String, DaemonError> {
     let backend = state.active_backend.read().await;
     Ok(backend.to_string())
 }
@@ -1071,7 +1241,12 @@ pub async fn switch_backend(
     let new_type = match backend_type.as_str() {
         "kubo" | "Kubo" => crate::backend_trait::BackendType::Kubo,
         "iroh" | "Iroh" => crate::backend_trait::BackendType::Iroh,
-        _ => return Err(DaemonError::ConfigError(format!("Unknown backend: {}", backend_type))),
+        _ => {
+            return Err(DaemonError::ConfigError(format!(
+                "Unknown backend: {}",
+                backend_type
+            )))
+        }
     };
 
     // 诚实防护：Iroh 后端目前是 stub，实际的文件 / Pin / IPNS 操作仍全部
@@ -1081,7 +1256,8 @@ pub async fn switch_backend(
     if matches!(new_type, crate::backend_trait::BackendType::Iroh) {
         return Err(DaemonError::ApiError(
             "Iroh 后端尚未接入实际操作（当前仅用于基准与兼容性测试）；\
-             文件 / Pin / IPNS 仍由 Kubo 处理，暂不支持切换为活跃后端".to_string(),
+             文件 / Pin / IPNS 仍由 Kubo 处理，暂不支持切换为活跃后端"
+                .to_string(),
         ));
     }
 
@@ -1093,7 +1269,8 @@ pub async fn switch_backend(
 
     if !available {
         return Err(DaemonError::ApiError(format!(
-            "Backend '{}' is not available", new_type
+            "Backend '{}' is not available",
+            new_type
         )));
     }
 
@@ -1169,11 +1346,17 @@ pub async fn iroh_add_file(
 ) -> Result<crate::backend_trait::AddOutput, DaemonError> {
     let path = std::path::PathBuf::from(&file_path);
     if !path.exists() {
-        return Err(DaemonError::IoError(format!("File not found: {}", file_path)));
+        return Err(DaemonError::IoError(format!(
+            "File not found: {}",
+            file_path
+        )));
     }
     let out = state.iroh_backend.add_file(&path).await.map_err(iroh_err)?;
     // 打上 iroh 来源标记，供 Auto 路由精确分发
-    state.backend_router.record_origin(&out.cid, BackendType::Iroh).await;
+    state
+        .backend_router
+        .record_origin(&out.cid, BackendType::Iroh)
+        .await;
     Ok(out)
 }
 
@@ -1189,12 +1372,13 @@ pub async fn iroh_node_info(
 ///
 /// 对方用 `iroh_fetch_ticket` 即可跨节点收取内容。
 #[tauri::command]
-pub async fn iroh_share(
-    state: State<'_, AppState>,
-    cid: String,
-) -> Result<String, DaemonError> {
+pub async fn iroh_share(state: State<'_, AppState>, cid: String) -> Result<String, DaemonError> {
     tracing::info!("iroh_share: {}", cid);
-    state.iroh_backend.share_ticket(&cid).await.map_err(iroh_err)
+    state
+        .iroh_backend
+        .share_ticket(&cid)
+        .await
+        .map_err(iroh_err)
 }
 
 /// 用 ticket 从远端 iroh 节点收取内容，可选保存到本地路径
@@ -1206,13 +1390,24 @@ pub async fn iroh_fetch_ticket(
     ticket: String,
     save_path: Option<String>,
 ) -> Result<serde_json::Value, DaemonError> {
-    tracing::info!("iroh_fetch_ticket (save_path={:?})", save_path);
+    validate_ticket(&ticket)?;
+    tracing::info!(
+        "iroh_fetch_ticket requested (ticket redacted, save={})",
+        save_path.is_some()
+    );
     // 解析 ticket 拿到 cid（收取后内容落入 iroh，标记来源）
     let cid = crate::iroh_adapter::ticket_cid(&ticket);
-    let bytes = state.iroh_backend.fetch_ticket(&ticket).await.map_err(iroh_err)?;
+    let bytes = state
+        .iroh_backend
+        .fetch_ticket(&ticket)
+        .await
+        .map_err(iroh_err)?;
     if let Some(cid) = &cid {
         // 内容已落入 iroh → 标记来源；同时记住 provider，供日后本地 miss 时网络重取
-        state.backend_router.record_origin(cid, BackendType::Iroh).await;
+        state
+            .backend_router
+            .record_origin(cid, BackendType::Iroh)
+            .await;
         state.backend_router.record_provider(cid, &ticket).await;
     }
     let size = bytes.len();
@@ -1220,10 +1415,12 @@ pub async fn iroh_fetch_ticket(
     let saved = if let Some(p) = save_path {
         let path = std::path::PathBuf::from(&p);
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await
+            tokio::fs::create_dir_all(parent)
+                .await
                 .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
         }
-        tokio::fs::write(&path, &bytes).await
+        tokio::fs::write(&path, &bytes)
+            .await
             .map_err(|e| DaemonError::IoError(format!("Failed to write file: {}", e)))?;
         Some(p)
     } else {
@@ -1235,29 +1432,21 @@ pub async fn iroh_fetch_ticket(
 
 /// keep-alive：让某 iroh blob 不被 GC 回收（命名持久 tag；对应 Kubo 的 pin）
 #[tauri::command]
-pub async fn iroh_keep(
-    state: State<'_, AppState>,
-    cid: String,
-) -> Result<(), DaemonError> {
+pub async fn iroh_keep(state: State<'_, AppState>, cid: String) -> Result<(), DaemonError> {
     tracing::info!("iroh_keep: {}", cid);
     state.iroh_backend.keep(&cid).await.map_err(iroh_err)
 }
 
 /// 取消 keep-alive（删除命名 tag，内容此后可被 GC）
 #[tauri::command]
-pub async fn iroh_unkeep(
-    state: State<'_, AppState>,
-    cid: String,
-) -> Result<(), DaemonError> {
+pub async fn iroh_unkeep(state: State<'_, AppState>, cid: String) -> Result<(), DaemonError> {
     tracing::info!("iroh_unkeep: {}", cid);
     state.iroh_backend.unkeep(&cid).await.map_err(iroh_err)
 }
 
 /// 关闭 iroh 网络/serving 栈（Phase D2 生命周期）；下次使用自动重建（重启）。
 #[tauri::command]
-pub async fn iroh_shutdown(
-    state: State<'_, AppState>,
-) -> Result<(), DaemonError> {
+pub async fn iroh_shutdown(state: State<'_, AppState>) -> Result<(), DaemonError> {
     tracing::info!("iroh_shutdown requested");
     state.iroh_backend.shutdown().await.map_err(iroh_err)
 }
@@ -1275,6 +1464,7 @@ pub async fn iroh_register_ticket(
     state: State<'_, AppState>,
     ticket: String,
 ) -> Result<String, DaemonError> {
+    validate_ticket(&ticket)?;
     let cid = crate::iroh_adapter::ticket_cid(&ticket).ok_or_else(|| {
         DaemonError::ApiError(
             "invalid ticket (build with --features iroh-backend to parse tickets)".to_string(),
@@ -1287,9 +1477,7 @@ pub async fn iroh_register_ticket(
 
 /// 获取当前路由策略（KuboOnly / IrohOnly / Auto）
 #[tauri::command]
-pub async fn get_route_policy(
-    state: State<'_, AppState>,
-) -> Result<String, DaemonError> {
+pub async fn get_route_policy(state: State<'_, AppState>) -> Result<String, DaemonError> {
     Ok(state.backend_router.policy().await.to_string())
 }
 
@@ -1302,7 +1490,45 @@ pub async fn set_route_policy(
     let p = crate::backend_router::RoutePolicy::parse(&policy)
         .ok_or_else(|| DaemonError::ConfigError(format!("Unknown route policy: {}", policy)))?;
     state.backend_router.set_policy(p).await;
+    let mut config = state.get_config().await;
+    config.route_policy = p.to_string();
+    config.save().map_err(DaemonError::ConfigError)?;
+    state.update_config(config).await;
     Ok(p.to_string())
+}
+
+fn validate_cid(cid: &str) -> Result<(), DaemonError> {
+    let value = cid.trim();
+    if value.is_empty() || value.len() > 256 || !value.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(DaemonError::ApiError("invalid CID/hash format".to_string()));
+    }
+    Ok(())
+}
+
+fn validate_ticket(ticket: &str) -> Result<(), DaemonError> {
+    let value = ticket.trim();
+    if value.is_empty() || value.len() > 16_384 || value.bytes().any(|b| b.is_ascii_control()) {
+        return Err(DaemonError::ApiError("invalid iroh ticket".to_string()));
+    }
+    Ok(())
+}
+
+fn validate_path_count(paths: &[String]) -> Result<(), DaemonError> {
+    if paths.is_empty() || paths.len() > 256 {
+        return Err(DaemonError::IoError(
+            "file batch must contain 1 to 256 paths".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &std::path::Path) -> Result<(), DaemonError> {
+    if path.as_os_str().is_empty() {
+        return Err(DaemonError::IoError(
+            "output path cannot be empty".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// 查询某个 CID 在当前策略下会被路由到哪个后端（不实际读取，只做决策展示）
@@ -1360,16 +1586,17 @@ pub async fn set_node_label(
     state: State<'_, AppState>,
     label: String,
 ) -> Result<NodeIdentityInfo, DaemonError> {
-    state.identity.set_label(&label).map_err(DaemonError::ConfigError)?;
+    state
+        .identity
+        .set_label(&label)
+        .map_err(DaemonError::ConfigError)?;
     tracing::info!("node label set to '{}'", label.trim());
     get_node_identity(state).await
 }
 
 /// 导出可验证的身份文档（iroh node_id 本身是自证 Ed25519 公钥）
 #[tauri::command]
-pub async fn export_identity(
-    state: State<'_, AppState>,
-) -> Result<String, DaemonError> {
+pub async fn export_identity(state: State<'_, AppState>) -> Result<String, DaemonError> {
     let info = get_node_identity(state).await?;
     let doc = serde_json::json!({
         "label": info.label,
@@ -1378,8 +1605,7 @@ pub async fn export_identity(
         "iroh_node_id": info.iroh_node_id,
         "note": "iroh node_id is a self-certifying Ed25519 public key; a peer verifies it by connecting.",
     });
-    serde_json::to_string_pretty(&doc)
-        .map_err(|e| DaemonError::ConfigError(e.to_string()))
+    serde_json::to_string_pretty(&doc).map_err(|e| DaemonError::ConfigError(e.to_string()))
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1408,15 +1634,20 @@ pub struct NodeHealth {
 
 /// 获取节点健康度快照
 #[tauri::command]
-pub async fn get_node_health(
-    state: State<'_, AppState>,
-) -> Result<NodeHealth, DaemonError> {
+pub async fn get_node_health(state: State<'_, AppState>) -> Result<NodeHealth, DaemonError> {
     let now = crate::state::now_secs();
     let app_uptime_secs = now.saturating_sub(state.app_started_at);
 
-    let kubo_running = matches!(state.get_daemon_status().await, DaemonStatus::Running { .. });
+    let kubo_running = matches!(
+        state.get_daemon_status().await,
+        DaemonStatus::Running { .. }
+    );
     let daemon_uptime_secs = if kubo_running {
-        state.daemon_started_at.read().await.map(|t| now.saturating_sub(t))
+        state
+            .daemon_started_at
+            .read()
+            .await
+            .map(|t| now.saturating_sub(t))
     } else {
         None
     };
@@ -1426,11 +1657,8 @@ pub async fn get_node_health(
     if kubo_running {
         if let Some(client) = state.get_api_client().await {
             // 并行拉取（各自失败不影响其他）
-            let (repo, sw, bw) = tokio::join!(
-                client.repo_stat(),
-                client.swarm_peers(),
-                client.stats_bw(),
-            );
+            let (repo, sw, bw) =
+                tokio::join!(client.repo_stat(), client.swarm_peers(), client.stats_bw(),);
             if let Ok(r) = repo {
                 num_objects = Some(r.num_objects);
                 repo_size = Some(r.repo_size);
@@ -1461,4 +1689,199 @@ pub async fn get_node_health(
     })
 }
 
+// ════════════════════════════════════════════════════════════════
+// 二进制哈希校验（安全增强）
+// ════════════════════════════════════════════════════════════════
 
+/// 二进制验证信息
+#[derive(Debug, Clone, Serialize)]
+pub struct BinaryVerificationInfo {
+    /// 二进制文件路径
+    pub path: String,
+    /// 版本信息
+    pub version: String,
+    /// 计算出的 SHA-256 哈希
+    pub sha256: String,
+    /// 是否匹配已知官方哈希
+    pub matches_known_hash: bool,
+    /// 当前平台标识
+    pub platform: String,
+}
+
+/// 获取当前使用的 Kubo 二进制的验证信息
+#[tauri::command]
+pub async fn get_binary_verification_info(
+    _state: State<'_, AppState>,
+) -> Result<BinaryVerificationInfo, DaemonError> {
+    // 查找二进制文件
+    let binary_path = crate::daemon::BinaryFinder::find()
+        .ok_or(DaemonError::BinaryNotFound)?;
+
+    // 获取版本
+    let version = crate::daemon::BinaryFinder::get_version(&binary_path)?;
+
+    // 计算哈希
+    let sha256 = crate::daemon::BinaryFinder::calculate_hash(&binary_path)
+        .map_err(|e| DaemonError::BinaryVerificationFailed(e.to_string()))?;
+
+    // 检查是否匹配已知哈希
+    let matches_known_hash = crate::daemon::BinaryFinder::verify_against_known_hashes(&binary_path)
+        .unwrap_or(false);
+
+    let platform = crate::daemon::KuboHashes::get_current_platform();
+
+    Ok(BinaryVerificationInfo {
+        path: binary_path.to_string_lossy().to_string(),
+        version,
+        sha256,
+        matches_known_hash,
+        platform,
+    })
+}
+
+/// 设置配置中的 Kubo 二进制 SHA-256 哈希
+#[tauri::command]
+pub async fn set_binary_hash(
+    state: State<'_, AppState>,
+    hash: Option<String>,
+) -> Result<(), DaemonError> {
+    let mut config = state.get_config().await;
+
+    // 验证哈希格式（如果提供）
+    if let Some(ref h) = hash {
+        if h.len() != 64 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(DaemonError::ConfigError(
+                "Invalid hash format: must be 64 hexadecimal characters".to_string(),
+            ));
+        }
+    }
+
+    config.kubo_binary_sha256 = hash;
+    config.save().map_err(DaemonError::ConfigError)?;
+    state.update_config(config).await;
+
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════
+// MFS (Mutable File System) 命令
+// ════════════════════════════════════════════════════════════════
+
+/// 列出 MFS 目录内容
+#[tauri::command]
+pub async fn mfs_ls(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::daemon::MfsLsResult, DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_ls(&path).await
+}
+
+/// 获取 MFS 文件/目录状态
+#[tauri::command]
+pub async fn mfs_stat(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<crate::daemon::MfsStatResult, DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_stat(&path).await
+}
+
+/// 创建 MFS 目录
+#[tauri::command]
+pub async fn mfs_mkdir(
+    state: State<'_, AppState>,
+    path: String,
+    parents: bool,
+) -> Result<(), DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_mkdir(&path, parents).await
+}
+
+/// 删除 MFS 文件/目录
+#[tauri::command]
+pub async fn mfs_rm(
+    state: State<'_, AppState>,
+    path: String,
+    recursive: bool,
+) -> Result<(), DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_rm(&path, recursive).await
+}
+
+/// 复制 IPFS 对象到 MFS
+#[tauri::command]
+pub async fn mfs_cp(
+    state: State<'_, AppState>,
+    source: String,
+    dest: String,
+) -> Result<(), DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_cp(&source, &dest).await
+}
+
+/// 移动/重命名 MFS 文件/目录
+#[tauri::command]
+pub async fn mfs_mv(
+    state: State<'_, AppState>,
+    source: String,
+    dest: String,
+) -> Result<(), DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_mv(&source, &dest).await
+}
+
+/// 从 MFS 读取文件内容
+#[tauri::command]
+pub async fn mfs_read(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<u8>, DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_read(&path).await
+}
+
+/// 写入内容到 MFS 文件
+#[tauri::command]
+pub async fn mfs_write(
+    state: State<'_, AppState>,
+    path: String,
+    content: Vec<u8>,
+    create: bool,
+    truncate: bool,
+) -> Result<(), DaemonError> {
+    let client = state
+        .get_api_client()
+        .await
+        .ok_or(DaemonError::InvalidState)?;
+
+    client.files_write(&path, content, create, truncate).await
+}

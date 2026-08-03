@@ -131,5 +131,17 @@
   "appUptime": "App uptime",
   "nodeUptime": "Node online",
   "contribution": "served / contributed",
-  "contentItems": "content items"
+  "contentItems": "content items",
+  "copied": "Copied",
+  "confirm": "Confirm",
+  "cancel": "Cancel",
+  "confirmUnpin": "Remove local retention?",
+  "confirmDeleteKey": "Delete this key record?",
+  "loading": "Loading",
+  "contentLibrary": "Content library",
+  "indexedItems": "indexed items",
+  "backend": "Backend",
+  "added": "Added",
+  "langZh": "中文",
+  "langEn": "English"
 }

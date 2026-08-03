@@ -15,8 +15,8 @@
 //! ```
 
 use crate::backend_trait::Backend;
-use crate::kubo_adapter::KuboBackend;
 use crate::iroh_adapter::IrohBackend;
+use crate::kubo_adapter::KuboBackend;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
@@ -84,12 +84,8 @@ impl CompatTester {
     }
 
     /// 注册并运行单个测试
-    async fn run_test<F, Fut>(
-        &mut self,
-        name: &str,
-        requires_both: bool,
-        f: F,
-    ) where
+    async fn run_test<F, Fut>(&mut self, name: &str, requires_both: bool, f: F)
+    where
         // 传入后端的克隆（owned）而非引用，避免闭包返回借用 future 引发的
         // 高阶生命周期问题；KuboBackend/IrohBackend 均为轻量 Clone。
         F: FnOnce(KuboBackend, IrohBackend) -> Fut,
@@ -108,7 +104,10 @@ impl CompatTester {
                 duration_ms: started.elapsed().as_millis() as u64,
                 kubo_result: None,
                 iroh_result: None,
-                error: Some(format!("Backends not available: kubo={}, iroh={}", kubo_ok, iroh_ok)),
+                error: Some(format!(
+                    "Backends not available: kubo={}, iroh={}",
+                    kubo_ok, iroh_ok
+                )),
                 notes: vec!["SKIP: backends unavailable".to_string()],
             });
             return;
@@ -123,7 +122,11 @@ impl CompatTester {
                     duration_ms: started.elapsed().as_millis() as u64,
                     kubo_result: Some(kubo_val),
                     iroh_result: Some(iroh_val),
-                    error: if passed { None } else { Some("Values differ".to_string()) },
+                    error: if passed {
+                        None
+                    } else {
+                        Some("Values differ".to_string())
+                    },
                     notes: vec![],
                 });
             }
@@ -149,7 +152,8 @@ impl CompatTester {
             let kv = kubo.version().await.map_err(|e| e.to_string())?;
             let iv = iroh.version().await.map_err(|e| e.to_string())?;
             Ok((kv, iv))
-        }).await;
+        })
+        .await;
     }
 
     /// 测试 2: 节点可达性
@@ -159,7 +163,8 @@ impl CompatTester {
             let ia = iroh.is_available().await;
             // 比较布尔值（转为字符串）
             Ok((ka.to_string(), ia.to_string()))
-        }).await;
+        })
+        .await;
     }
 
     /// 测试 3: 仓库初始化状态
@@ -172,7 +177,8 @@ impl CompatTester {
             let i_ok = ir.num_objects > 0 || ir.repo_size > 0;
             // 至少一个后端已初始化即可
             Ok(((k_ok || i_ok).to_string(), (k_ok || i_ok).to_string()))
-        }).await;
+        })
+        .await;
     }
 
     /// 测试 4: 网络节点发现
@@ -184,7 +190,8 @@ impl CompatTester {
             // 比较：不同后端应有不同 Peer ID（这是正常的）
             let differ = kn.peer_id != info.peer_id;
             Ok((differ.to_string(), "true".to_string()))
-        }).await;
+        })
+        .await;
     }
 
     /// 运行全部兼容性测试
@@ -201,7 +208,9 @@ impl CompatTester {
         let total = self.results.len();
         let passed = self.results.iter().filter(|r| r.passed).count();
         let failed = total - passed;
-        let skipped = self.results.iter()
+        let skipped = self
+            .results
+            .iter()
             .filter(|r| r.notes.iter().any(|n| n.starts_with("SKIP")))
             .count();
         let score = if total > 0 {
@@ -269,7 +278,9 @@ impl ContentIntegrityTester {
         let _ = std::fs::remove_file(&tmp);
 
         // 先计算成功标志，避免在同一元组里对 iroh_result 移动后再借用
-        let success = iroh_result.as_ref().is_some_and(|s| !s.starts_with("Error"));
+        let success = iroh_result
+            .as_ref()
+            .is_some_and(|s| !s.starts_with("Error"));
         (kubo_result.cid, iroh_result, success)
     }
 }

@@ -15,13 +15,13 @@
 //!                      └── CircuitBreaker
 //! ```
 
+use crate::cache::CacheStore;
+use crate::daemon::IpfsApiClient;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
-use serde::Serialize;
-use crate::daemon::IpfsApiClient;
-use crate::cache::CacheStore;
+use tokio::sync::{Mutex, RwLock};
 
 // ════════════════════════════════════════════════════════════════
 // 熔断器
@@ -30,11 +30,15 @@ use crate::cache::CacheStore;
 /// 熔断器状态
 #[derive(Debug, Clone, PartialEq)]
 enum CircuitState {
-    Closed,             // 正常
-    Open { until: Instant }, // 熔断中，直到指定时间
+    Closed, // 正常
+    Open {
+        until: Instant,
+    }, // 熔断中，直到指定时间
     /// 半开（试探性恢复）；`probing` 表示已有一个探针请求在途，
     /// 期间其余请求继续被短路，直到探针 record_success/record_failure 出结果。
-    HalfOpen { probing: bool },
+    HalfOpen {
+        probing: bool,
+    },
 }
 
 /// 简单熔断器：连续失败 N 次后熔断 M 秒
@@ -264,14 +268,13 @@ impl ProxyClient {
                         }
                     }
                 }
-                PrefetchHint::Pins
-                    if prefetch.should_prefetch("pins").await => {
-                        if let Ok(pins) = api.pin_ls().await {
-                            if let Ok(json) = serde_json::to_string(&pins) {
-                                cache.set_pins(&json);
-                            }
+                PrefetchHint::Pins if prefetch.should_prefetch("pins").await => {
+                    if let Ok(pins) = api.pin_ls().await {
+                        if let Ok(json) = serde_json::to_string(&pins) {
+                            cache.set_pins(&json);
                         }
                     }
+                }
                 _ => {}
             }
         });
@@ -295,7 +298,9 @@ impl ProxyClient {
             }
         }
 
-        let api = self.api.clone()
+        let api = self
+            .api
+            .clone()
             .ok_or_else(|| "API client not initialized".to_string())?;
 
         match f(api).await {
@@ -311,7 +316,8 @@ impl ProxyClient {
                     stats.total_requests += 1;
                     stats.api_calls += 1;
                     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-                    stats.avg_latency_ms = (stats.avg_latency_ms * (stats.api_calls - 1) as f64 + elapsed)
+                    stats.avg_latency_ms = (stats.avg_latency_ms * (stats.api_calls - 1) as f64
+                        + elapsed)
                         / stats.api_calls as f64;
                 }
                 Ok(result)
@@ -350,7 +356,9 @@ impl ProxyClient {
                 return Ok(stats);
             }
         }
-        let result = self.call_api(|api| async move { api.repo_stat().await }).await?;
+        let result = self
+            .call_api(|api| async move { api.repo_stat().await })
+            .await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_repo_stats(&json);
         }
@@ -364,7 +372,9 @@ impl ProxyClient {
                 return Ok(peers);
             }
         }
-        let result = self.call_api(|api| async move { api.swarm_peers().await }).await?;
+        let result = self
+            .call_api(|api| async move { api.swarm_peers().await })
+            .await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_peers(&json);
         }
@@ -378,7 +388,9 @@ impl ProxyClient {
                 return Ok(bw);
             }
         }
-        let result = self.call_api(|api| async move { api.stats_bw().await }).await?;
+        let result = self
+            .call_api(|api| async move { api.stats_bw().await })
+            .await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_bandwidth(&json);
         }
@@ -392,7 +404,9 @@ impl ProxyClient {
                 return Ok(bs);
             }
         }
-        let result = self.call_api(|api| async move { api.bitswap_stat().await }).await?;
+        let result = self
+            .call_api(|api| async move { api.bitswap_stat().await })
+            .await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_bitswap(&json);
         }
@@ -406,7 +420,9 @@ impl ProxyClient {
                 return Ok(pins);
             }
         }
-        let result = self.call_api(|api| async move { api.pin_ls().await }).await?;
+        let result = self
+            .call_api(|api| async move { api.pin_ls().await })
+            .await?;
         if let Ok(json) = serde_json::to_string(&result) {
             self.cache.set_pins(&json);
         }
@@ -433,8 +449,8 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir()
-            .join(format!("ipfs-proxy-test-{}-{}.db", std::process::id(), n));
+        let path =
+            std::env::temp_dir().join(format!("ipfs-proxy-test-{}-{}.db", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         Arc::new(CacheStore::new(path).unwrap())
     }

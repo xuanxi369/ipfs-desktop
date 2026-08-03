@@ -1,5 +1,7 @@
 import { useTranslation } from "react-i18next";
-import { PinEntry } from "./types";
+import { PinEntry, shortHash } from "./types";
+import { useState } from "react";
+import { Icon } from "./Icons";
 
 interface PinManagerProps {
   isRunning: boolean;
@@ -17,13 +19,16 @@ export default function PinManager({
   setPinCid, loadPins, addPinByCid, removePinByCid,
 }: PinManagerProps) {
   const { t } = useTranslation();
+  const [confirmCid, setConfirmCid] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = async (cid: string) => { await navigator.clipboard?.writeText(cid); setCopied(cid); window.setTimeout(() => setCopied(null), 1400); };
 
   return (
     <div className="pins-section">
       <div className="section-header">
-        <h2>{t("pinManagement")}</h2>
+        <div><span className="section-kicker">RETENTION</span><h2>{t("pinManagement")}</h2><p className="section-description">Keep important content available on this node.</p></div>
         <button onClick={loadPins} disabled={!isRunning || pinLoading} className="btn-small">
-          {pinLoading ? "⏳" : "🔄"} {t("refresh")}
+          {pinLoading ? <span className="spinner"/> : <Icon name="activity"/>} {t("refresh")}
         </button>
       </div>
 
@@ -38,11 +43,12 @@ export default function PinManager({
           disabled={!isRunning}
         />
         <button onClick={addPinByCid} disabled={!isRunning || !pinCid.trim()} className="btn-small btn-pin">
-          📌 {t("pin")}
+          <Icon name="pins"/> {t("pin")}
         </button>
       </div>
 
       {/* Pin 列表 */}
+      {pinLoading && <div className="table-skeleton" aria-label={t("loading")}><span/><span/><span/></div>}
       {pinList.length > 0 && (
         <div className="pin-table-container">
           <table className="pin-table">
@@ -56,16 +62,17 @@ export default function PinManager({
             <tbody>
               {pinList.map((pin, i) => (
                 <tr key={i}>
-                  <td className="hash-cell" title={pin.Cid}>{pin.Cid}</td>
+                  <td><button className="hash-button" title={pin.Cid} onClick={() => copy(pin.Cid)}>{shortHash(pin.Cid)} {copied === pin.Cid ? <span className="copied-label">{t("copied")}</span> : <Icon name="copy"/>}</button></td>
                   <td><span className={`pin-type-badge ${pin.Type}`}>{pin.Type}</span></td>
                   <td>
                     <button
-                      onClick={() => removePinByCid(pin.Cid)}
+                      onClick={() => setConfirmCid(pin.Cid)}
                       className="btn-small btn-danger"
                       disabled={!isRunning}
                     >
-                      ❌ {t("unpin")}
+                      {t("unpin")}
                     </button>
+                    {confirmCid === pin.Cid && <div className="confirm-popover"><span>{t("confirmUnpin")}</span><button onClick={() => { removePinByCid(pin.Cid); setConfirmCid(null); }}>{t("confirm")}</button><button onClick={() => setConfirmCid(null)}>{t("cancel")}</button></div>}
                   </td>
                 </tr>
               ))}
