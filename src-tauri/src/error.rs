@@ -52,6 +52,9 @@ pub enum DaemonError {
     /// I/O 错误
     #[error("I/O error: {0}")]
     IoError(String),
+
+    #[error("Backend {kind}: {message}")]
+    Backend { kind: String, message: String },
 }
 
 impl From<std::io::Error> for DaemonError {

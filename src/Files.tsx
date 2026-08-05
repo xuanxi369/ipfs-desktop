@@ -19,12 +19,13 @@ interface FilesProps {
   selectAndUpload: () => Promise<void>;
   catByCid: () => Promise<void>;
   downloadByCid: () => Promise<void>;
+  removeContentRecord: (cid: string) => Promise<void>;
 }
 
 export default function Files({
   isRunning, uploading, downloadCid, downloadProgress, downloading,
   catResult, uploadProgress, uploads, routeHint, contentRecords, loadContentRecords,
-  setDownloadCid, selectAndUpload, catByCid, downloadByCid,
+  setDownloadCid, selectAndUpload, catByCid, downloadByCid, removeContentRecord,
 }: FilesProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState<string | null>(null);
@@ -32,14 +33,14 @@ export default function Files({
 
   return (
     <div className="files-section">
-      <div className="page-intro"><div><span className="section-kicker">CONTENT</span><h2>{t("files")}</h2><p>Add local content or retrieve it from the distributed network.</p></div><span className={`availability-badge ${isRunning ? "ready" : ""}`}>{isRunning ? "Ready" : "Node offline"}</span></div>
+      <div className="page-intro"><div><span className="section-kicker">CONTENT</span><h2>{t("files")}</h2><p>{t("filesDescription")}</p></div><span className={`availability-badge ${isRunning ? "ready" : ""}`}>{isRunning ? t("ready") : t("nodeOffline")}</span></div>
       <div className="section-header content-toolbar"><div><h3>{t("contentLibrary")}</h3><p className="section-description">{contentRecords.length} {t("indexedItems")}</p></div><button className="btn-small" onClick={loadContentRecords}><Icon name="activity"/> {t("refresh")}</button></div>
-      {contentRecords.length > 0 && <div className="content-table"><table><thead><tr><th>{t("name")}</th><th>CID</th><th>{t("size")}</th><th>{t("backend")}</th><th>{t("added")}</th></tr></thead><tbody>{contentRecords.map((f)=><tr key={f.cid}><td>{f.name}</td><td><button className="hash-button" title={f.cid} onClick={()=>copy(f.cid)}>{shortHash(f.cid)} <Icon name="copy"/></button></td><td>{formatBytes(f.size)}</td><td><span className="pin-type-badge">{f.backend}</span></td><td>{new Date(f.added_at*1000).toLocaleDateString()}</td></tr>)}</tbody></table></div>}
+      {contentRecords.length > 0 && <div className="content-table"><table><thead><tr><th>{t("name")}</th><th>CID</th><th>{t("size")}</th><th>{t("backend")}</th><th>{t("added")}</th><th> </th></tr></thead><tbody>{contentRecords.map((f)=><tr key={f.cid}><td>{f.name}</td><td><button className="hash-button" title={f.cid} onClick={()=>copy(f.cid)}>{shortHash(f.cid)} <Icon name="copy"/></button></td><td>{formatBytes(f.size)}</td><td><span className="pin-type-badge">{f.backend}</span></td><td>{new Date(f.added_at*1000).toLocaleDateString()}</td><td><button className="btn-small btn-danger" onClick={() => removeContentRecord(f.cid)}>Remove</button></td></tr>)}</tbody></table></div>}
       {/* ── 上传 ── */}
       <h2>{t("uploadFiles")}</h2>
       <div className="drop-zone" onClick={selectAndUpload}>
         <p>{t("dropHere")}</p>
-        <button className="btn-secondary" disabled={uploading || !isRunning}>
+        <button className="btn-secondary" disabled={uploading}>
           {uploading ? t("uploading") + "..." : t("selectFiles")}
         </button>
       </div>
@@ -69,12 +70,11 @@ export default function Files({
             placeholder={t("enterCid")}
             value={downloadCid}
             onChange={(e) => setDownloadCid(e.target.value)}
-            disabled={!isRunning}
           />
-          <button onClick={catByCid} disabled={!isRunning || !downloadCid.trim()} className="btn-small">
+          <button onClick={catByCid} disabled={!downloadCid.trim()} className="btn-small">
             <Icon name="search"/> {t("preview")}
           </button>
-          <button onClick={downloadByCid} disabled={!isRunning || !downloadCid.trim() || downloading} className="btn-small btn-download">
+          <button onClick={downloadByCid} disabled={!downloadCid.trim() || downloading} className="btn-small btn-download">
             {downloading ? <span className="spinner"/> : <Icon name="download"/>} {t("download")}
           </button>
         </div>

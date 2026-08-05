@@ -45,7 +45,7 @@ fn persist_json_map<V: Serialize>(path: &Option<PathBuf>, map: &HashMap<String, 
     let Some(p) = path else { return };
     match serde_json::to_string_pretty(map) {
         Ok(json) => {
-            if let Err(e) = std::fs::write(p, json) {
+            if let Err(e) = crate::atomic_file::write_atomic(p, json.as_bytes()) {
                 tracing::warn!("failed to persist {:?}: {e}", p);
             }
         }

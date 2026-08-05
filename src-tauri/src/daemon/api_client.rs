@@ -22,12 +22,16 @@ pub struct NodeId {
     #[serde(rename = "ID")]
     pub id: String,
     #[serde(rename = "PublicKey")]
+    #[serde(default)]
     pub public_key: String,
     #[serde(rename = "Addresses")]
+    #[serde(default)]
     pub addresses: Vec<String>,
     #[serde(rename = "AgentVersion")]
+    #[serde(default)]
     pub agent_version: String,
     #[serde(rename = "ProtocolVersion")]
+    #[serde(default)]
     pub protocol_version: String,
 }
 
@@ -201,14 +205,14 @@ impl IpfsApiClient {
         format!("{}/api/v0/{}", self.api_addr, endpoint)
     }
 
-    /// 获取节点 ID（只读，GET）
+    /// 获取节点 ID（Kubo RPC 即使只读也要求 POST）
     pub async fn id(&self) -> Result<NodeId, DaemonError> {
         let url = self.api_url("id");
         tracing::debug!("Fetching node ID from: {}", url);
 
         let response =
             self.client
-                .get(&url)
+                .post(&url)
                 .send()
                 .await
                 .map_err(|e| DaemonError::ApiConnectionFailed {
@@ -232,14 +236,14 @@ impl IpfsApiClient {
         Ok(node_id)
     }
 
-    /// 获取版本信息（只读，GET）
+    /// 获取版本信息（Kubo RPC 即使只读也要求 POST）
     pub async fn version(&self) -> Result<VersionInfo, DaemonError> {
         let url = self.api_url("version");
         tracing::debug!("Fetching version from: {}", url);
 
         let response =
             self.client
-                .get(&url)
+                .post(&url)
                 .send()
                 .await
                 .map_err(|e| DaemonError::ApiConnectionFailed {
@@ -263,14 +267,14 @@ impl IpfsApiClient {
         Ok(version)
     }
 
-    /// 获取仓库统计信息（只读，GET）
+    /// 获取仓库统计信息（Kubo RPC 即使只读也要求 POST）
     pub async fn repo_stat(&self) -> Result<RepoStats, DaemonError> {
         let url = self.api_url("repo/stat");
         tracing::debug!("Fetching repo stats from: {}", url);
 
         let response =
             self.client
-                .get(&url)
+                .post(&url)
                 .send()
                 .await
                 .map_err(|e| DaemonError::ApiConnectionFailed {
@@ -298,14 +302,14 @@ impl IpfsApiClient {
         Ok(stats)
     }
 
-    /// 获取 Swarm 连接的对等节点（只读，GET）
+    /// 获取 Swarm 连接的对等节点（Kubo RPC 即使只读也要求 POST）
     pub async fn swarm_peers(&self) -> Result<SwarmPeers, DaemonError> {
         let url = self.api_url("swarm/peers");
         tracing::debug!("Fetching swarm peers from: {}", url);
 
         let response =
             self.client
-                .get(&url)
+                .post(&url)
                 .send()
                 .await
                 .map_err(|e| DaemonError::ApiConnectionFailed {
@@ -664,14 +668,32 @@ impl IpfsApiClient {
             .await
             .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
 
-        // pin/ls 返回 NDJSON，逐行解析
+        // Kubo versions differ: newer versions return a single object
+        // `{ "Keys": { "cid": { "Type": "recursive" } } }`, while
+        // some gateways return NDJSON PinEntry records. Accept both forms.
         let mut pins = Vec::new();
-        for line in text.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if let Ok(pin) = serde_json::from_str::<PinEntry>(line) {
+        if let Ok(list) = serde_json::from_str::<PinList>(&text) {
+            pins = list.pins;
+        } else if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(keys) = value.get("Keys").and_then(|v| v.as_object()) {
+                pins.extend(keys.iter().map(|(cid, info)| {
+                    PinEntry {
+                        cid: cid.clone(),
+                        pin_type: info
+                            .get("Type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("recursive")
+                            .to_string(),
+                    }
+                }));
+            } else if let Ok(pin) = serde_json::from_value::<PinEntry>(value) {
                 pins.push(pin);
+            }
+        } else {
+            for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                if let Ok(pin) = serde_json::from_str::<PinEntry>(line) {
+                    pins.push(pin);
+                }
             }
         }
 
@@ -836,11 +858,7 @@ impl IpfsApiClient {
         ipns_base: Option<&str>,
         allow_offline: bool,
     ) -> Result<IpnsPublishResult, DaemonError> {
-        let mut query_params = vec![
-            ("arg", cid),
-            ("key", key_name),
-            ("lifetime", lifetime),
-        ];
+        let mut query_params = vec![("arg", cid), ("key", key_name), ("lifetime", lifetime)];
 
         // 添加可选参数
         let ipns_base_str;
@@ -1015,7 +1033,8 @@ impl IpfsApiClient {
 
         tracing::debug!("Listing MFS directory: {}", path);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[("arg", path_encoded.as_ref()), ("long", "true")])
             .send()
@@ -1048,7 +1067,8 @@ impl IpfsApiClient {
 
         tracing::debug!("Getting MFS stat for: {}", path);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[("arg", path_encoded.as_ref())])
             .send()
@@ -1081,7 +1101,8 @@ impl IpfsApiClient {
 
         tracing::debug!("Creating MFS directory: {} (parents: {})", path, parents);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[
                 ("arg", path_encoded.as_ref()),
@@ -1112,7 +1133,8 @@ impl IpfsApiClient {
 
         tracing::debug!("Removing MFS path: {} (recursive: {})", path, recursive);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[
                 ("arg", path_encoded.as_ref()),
@@ -1144,7 +1166,8 @@ impl IpfsApiClient {
 
         tracing::debug!("Copying to MFS: {} -> {}", source, dest);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[
                 ("arg", source_encoded.as_ref()),
@@ -1176,7 +1199,8 @@ impl IpfsApiClient {
 
         tracing::debug!("Moving in MFS: {} -> {}", source, dest);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[
                 ("arg", source_encoded.as_ref()),
@@ -1207,7 +1231,8 @@ impl IpfsApiClient {
 
         tracing::debug!("Reading MFS file: {}", path);
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[("arg", path_encoded.as_ref())])
             .send()
@@ -1246,10 +1271,11 @@ impl IpfsApiClient {
 
         tracing::debug!("Writing to MFS file: {} ({} bytes)", path, content.len());
 
-        let form = reqwest::multipart::Form::new()
-            .part("data", reqwest::multipart::Part::bytes(content));
+        let form =
+            reqwest::multipart::Form::new().part("data", reqwest::multipart::Part::bytes(content));
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .query(&[
                 ("arg", path_encoded.as_ref()),

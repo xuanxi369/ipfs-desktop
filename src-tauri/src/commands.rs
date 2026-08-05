@@ -36,6 +36,21 @@ pub async fn start_daemon(
     // 手动启动 → 重置自愈重启计数（用户主动操作，给一份新的自愈预算）
     state.reset_restart_attempts();
 
+    // Kubo may already have been started by a terminal, launch agent, or the
+    // original IPFS Desktop. Starting a second process would fail on repo.lock
+    // and occupied ports, so attach to the healthy API instead.
+    if let Some(api_client) = state.get_api_client().await {
+        if api_client.swarm_peers().await.is_ok() {
+            let peer_id = api_client
+                .id()
+                .await
+                .map(|node| node.id)
+                .unwrap_or_else(|_| "unknown".to_string());
+            tracing::info!("Kubo API already available; attaching instead of spawning");
+            return state.attach_existing_daemon(app_handle, peer_id).await;
+        }
+    }
+
     // 更新状态为启动中
     state.set_daemon_status(DaemonStatus::Starting).await;
     app_handle
@@ -362,7 +377,7 @@ pub async fn set_auto_launch(state: State<'_, AppState>, enable: bool) -> Result
     let auto = auto_launch::AutoLaunchBuilder::new()
         .set_app_name(app_name)
         .set_app_path(&app_path.to_string_lossy())
-        .set_use_launch_agent(true)
+        .set_macos_launch_mode(auto_launch::MacOSLaunchMode::LaunchAgent)
         .build()
         .map_err(|e| DaemonError::ConfigError(format!("Failed to build auto-launch: {}", e)))?;
 
@@ -477,6 +492,9 @@ pub async fn download_file(
             let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
                 "API client not initialized".to_string(),
             ))?;
+            // HTTP chunked responses often omit Content-Length. Query Kubo's
+            // stat endpoint first so the UI can report a real percentage.
+            let total_hint = client.file_size(&cid).await.ok();
             client
                 .cat_to_file(&cid, &output, |loaded, total| {
                     let _ = app_handle.emit(
@@ -484,18 +502,22 @@ pub async fn download_file(
                         &DownloadProgress {
                             cid: cid.clone(),
                             loaded,
-                            total,
+                            total: total.or(total_hint),
                         },
                     );
                 })
                 .await?
         }
         BackendType::Iroh => {
-            let bytes = cat_file(state.clone(), cid.clone()).await?;
-            tokio::fs::write(&output, &bytes)
+            state
+                .iroh_backend
+                .export_to_file(&cid, &output)
                 .await
-                .map_err(|e| DaemonError::IoError(e.to_string()))?;
-            let size = bytes.len() as u64;
+                .map_err(iroh_err)?;
+            let size = tokio::fs::metadata(&output)
+                .await
+                .map_err(|e| DaemonError::IoError(e.to_string()))?
+                .len();
             let _ = app_handle.emit(
                 "download-progress",
                 &DownloadProgress {
@@ -703,6 +725,18 @@ pub async fn get_dashboard_stats(
         bitswap,
         pin_count,
     })
+}
+
+/// Locate the node's currently connected public peers. Coordinates are
+/// approximate GeoIP results and should not be treated as physical locations.
+#[tauri::command]
+pub async fn get_peer_geography(
+    state: State<'_, AppState>,
+) -> Result<crate::peer_geo::PeerGeoReport, DaemonError> {
+    let client = state.get_api_client().await.ok_or(DaemonError::ApiError(
+        "API client not initialized".to_string(),
+    ))?;
+    crate::peer_geo::locate_connected_peers(&client).await
 }
 
 /// 添加文件到 IPFS（带进度事件）
@@ -1335,7 +1369,27 @@ pub async fn run_compat_test(
 
 /// BackendError → DaemonError（前端统一错误模型）
 fn iroh_err(e: crate::backend_trait::BackendError) -> DaemonError {
-    DaemonError::ApiError(e.to_string())
+    use crate::backend_trait::BackendErrorKind as K;
+    match e.kind {
+        K::InvalidArgument => DaemonError::ConfigError(e.message),
+        K::NotFound => DaemonError::ApiError(format!("content not found: {}", e.message)),
+        K::Unavailable => DaemonError::ApiConnectionFailed {
+            addr: "iroh".into(),
+            detail: e.message,
+        },
+        K::Network | K::Timeout => DaemonError::ApiConnectionFailed {
+            addr: "iroh".into(),
+            detail: e.message,
+        },
+        K::Unsupported => DaemonError::Backend {
+            kind: "Unsupported".into(),
+            message: e.message,
+        },
+        K::Internal => DaemonError::Backend {
+            kind: "Internal".into(),
+            message: e.message,
+        },
+    }
 }
 
 /// 用 iroh 原生后端添加文件（内容寻址，返回 BLAKE3 hash 作为 cid）
@@ -1395,13 +1449,28 @@ pub async fn iroh_fetch_ticket(
         "iroh_fetch_ticket requested (ticket redacted, save={})",
         save_path.is_some()
     );
-    // 解析 ticket 拿到 cid（收取后内容落入 iroh，标记来源）
-    let cid = crate::iroh_adapter::ticket_cid(&ticket);
+    let parsed_cid = crate::iroh_adapter::ticket_cid(&ticket);
+    if let Some(ref p) = save_path {
+        let path = std::path::PathBuf::from(p);
+        validate_output_path(&path)?;
+        let (cid, size) = state
+            .iroh_backend
+            .fetch_ticket_to_file(&ticket, &path)
+            .await
+            .map_err(iroh_err)?;
+        state
+            .backend_router
+            .record_origin(&cid, BackendType::Iroh)
+            .await;
+        state.backend_router.record_provider(&cid, &ticket).await;
+        return Ok(serde_json::json!({ "cid": cid, "size": size, "saved": p }));
+    }
     let bytes = state
         .iroh_backend
         .fetch_ticket(&ticket)
         .await
         .map_err(iroh_err)?;
+    let cid = parsed_cid;
     if let Some(cid) = &cid {
         // 内容已落入 iroh → 标记来源；同时记住 provider，供日后本地 miss 时网络重取
         state
@@ -1412,22 +1481,7 @@ pub async fn iroh_fetch_ticket(
     }
     let size = bytes.len();
 
-    let saved = if let Some(p) = save_path {
-        let path = std::path::PathBuf::from(&p);
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| DaemonError::IoError(format!("Failed to create output dir: {}", e)))?;
-        }
-        tokio::fs::write(&path, &bytes)
-            .await
-            .map_err(|e| DaemonError::IoError(format!("Failed to write file: {}", e)))?;
-        Some(p)
-    } else {
-        None
-    };
-
-    Ok(serde_json::json!({ "size": size, "saved": saved }))
+    Ok(serde_json::json!({ "cid": cid, "size": size, "saved": null }))
 }
 
 /// keep-alive：让某 iroh blob 不被 GC 回收（命名持久 tag；对应 Kubo 的 pin）
@@ -1523,12 +1577,7 @@ fn validate_path_count(paths: &[String]) -> Result<(), DaemonError> {
 }
 
 fn validate_output_path(path: &std::path::Path) -> Result<(), DaemonError> {
-    if path.as_os_str().is_empty() {
-        return Err(DaemonError::IoError(
-            "output path cannot be empty".to_string(),
-        ));
-    }
-    Ok(())
+    crate::path_security::validate_output_path(path)
 }
 
 /// 查询某个 CID 在当前策略下会被路由到哪个后端（不实际读取，只做决策展示）
@@ -1714,8 +1763,7 @@ pub async fn get_binary_verification_info(
     _state: State<'_, AppState>,
 ) -> Result<BinaryVerificationInfo, DaemonError> {
     // 查找二进制文件
-    let binary_path = crate::daemon::BinaryFinder::find()
-        .ok_or(DaemonError::BinaryNotFound)?;
+    let binary_path = crate::daemon::BinaryFinder::find().ok_or(DaemonError::BinaryNotFound)?;
 
     // 获取版本
     let version = crate::daemon::BinaryFinder::get_version(&binary_path)?;
@@ -1725,8 +1773,8 @@ pub async fn get_binary_verification_info(
         .map_err(|e| DaemonError::BinaryVerificationFailed(e.to_string()))?;
 
     // 检查是否匹配已知哈希
-    let matches_known_hash = crate::daemon::BinaryFinder::verify_against_known_hashes(&binary_path)
-        .unwrap_or(false);
+    let matches_known_hash =
+        crate::daemon::BinaryFinder::verify_against_known_hashes(&binary_path).unwrap_or(false);
 
     let platform = crate::daemon::KuboHashes::get_current_platform();
 
@@ -1761,127 +1809,4 @@ pub async fn set_binary_hash(
     state.update_config(config).await;
 
     Ok(())
-}
-
-// ════════════════════════════════════════════════════════════════
-// MFS (Mutable File System) 命令
-// ════════════════════════════════════════════════════════════════
-
-/// 列出 MFS 目录内容
-#[tauri::command]
-pub async fn mfs_ls(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<crate::daemon::MfsLsResult, DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_ls(&path).await
-}
-
-/// 获取 MFS 文件/目录状态
-#[tauri::command]
-pub async fn mfs_stat(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<crate::daemon::MfsStatResult, DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_stat(&path).await
-}
-
-/// 创建 MFS 目录
-#[tauri::command]
-pub async fn mfs_mkdir(
-    state: State<'_, AppState>,
-    path: String,
-    parents: bool,
-) -> Result<(), DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_mkdir(&path, parents).await
-}
-
-/// 删除 MFS 文件/目录
-#[tauri::command]
-pub async fn mfs_rm(
-    state: State<'_, AppState>,
-    path: String,
-    recursive: bool,
-) -> Result<(), DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_rm(&path, recursive).await
-}
-
-/// 复制 IPFS 对象到 MFS
-#[tauri::command]
-pub async fn mfs_cp(
-    state: State<'_, AppState>,
-    source: String,
-    dest: String,
-) -> Result<(), DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_cp(&source, &dest).await
-}
-
-/// 移动/重命名 MFS 文件/目录
-#[tauri::command]
-pub async fn mfs_mv(
-    state: State<'_, AppState>,
-    source: String,
-    dest: String,
-) -> Result<(), DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_mv(&source, &dest).await
-}
-
-/// 从 MFS 读取文件内容
-#[tauri::command]
-pub async fn mfs_read(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<Vec<u8>, DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_read(&path).await
-}
-
-/// 写入内容到 MFS 文件
-#[tauri::command]
-pub async fn mfs_write(
-    state: State<'_, AppState>,
-    path: String,
-    content: Vec<u8>,
-    create: bool,
-    truncate: bool,
-) -> Result<(), DaemonError> {
-    let client = state
-        .get_api_client()
-        .await
-        .ok_or(DaemonError::InvalidState)?;
-
-    client.files_write(&path, content, create, truncate).await
 }

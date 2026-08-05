@@ -25,6 +25,7 @@ jobs:
           cache: "npm"
       - run: npm ci
       - run: npm run typecheck
+      - run: npm test
 
   # ════════════════════════════════════════════════════════════
   # 2. Rust 编译 + 单元测试 (矩阵: linux/macos/windows)
@@ -86,6 +87,34 @@ jobs:
       - name: Cargo test (unit)
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
+  iroh-backend:
+    needs: frontend-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libdbus-1-dev \
+            libsecret-1-dev \
+            libssl-dev
+      - name: Cargo check (iroh backend)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --features iroh-backend
+      - name: Cargo test (iroh backend)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features iroh-backend --lib
+
   # ════════════════════════════════════════════════════════════
   # 3. Rust 代码质量检查 (仅 Linux, 快速)
   # ════════════════════════════════════════════════════════════
@@ -116,8 +145,8 @@ jobs:
             libsecret-1-dev \
             libssl-dev
 
-      - name: Rustfmt (auto-format)
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all
+      - name: Rustfmt (check)
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings -A deprecated

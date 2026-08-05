@@ -314,6 +314,63 @@ mod real {
             self.fetch_from(addr, &cid).await
         }
 
+        /// 收取 ticket 后直接从 iroh store 导出到磁盘，避免将完整 blob 放入内存。
+        pub async fn fetch_ticket_to_file(
+            &self,
+            ticket_str: &str,
+            target: &std::path::Path,
+        ) -> Result<(String, u64), BackendError> {
+            let ticket: iroh_blobs::ticket::BlobTicket =
+                ticket_str.trim().parse().map_err(|e| BackendError {
+                    kind: crate::backend_trait::BackendErrorKind::InvalidArgument,
+                    message: format!("invalid blob ticket: {e}"),
+                })?;
+            let hash = ticket.hash().clone();
+            let cid = hash.to_string();
+            let addr = ticket.addr().clone();
+            let net = self.net().await?;
+            let store = self.store().await?;
+            record_peer(&self.peers, addr.id.to_string(), "outbound").await;
+            let conn = net
+                .endpoint
+                .connect(addr, iroh_blobs::ALPN)
+                .await
+                .map_err(|e| BackendError::network(format!("iroh connect failed: {e}")))?;
+            store
+                .remote()
+                .fetch(conn, hash)
+                .await
+                .map_err(|e| BackendError::network(format!("iroh fetch failed: {e}")))?;
+            if let Some(parent) = target.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| BackendError::internal(format!("create output directory: {e}")))?;
+            }
+            let size = store
+                .export(hash, target)
+                .await
+                .map_err(|e| BackendError::internal(format!("iroh export failed: {e}")))?;
+            Ok((cid, size))
+        }
+
+        pub async fn export_to_file(
+            &self,
+            cid: &str,
+            target: &std::path::Path,
+        ) -> Result<u64, BackendError> {
+            let hash = Self::parse_hash(cid)?;
+            let store = self.store().await?;
+            if let Some(parent) = target.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| BackendError::internal(format!("create output directory: {e}")))?;
+            }
+            store
+                .export(hash, target)
+                .await
+                .map_err(|e| BackendError::internal(format!("iroh export failed: {e}")))
+        }
+
         /// 本地是否已存有该 blob（内容发现：供 Auto 路由「按内容所在」分发）。
         ///
         /// 非 iroh 形态的 cid（解析失败）视为「本地没有」，返回 `Ok(false)`，
@@ -602,6 +659,26 @@ impl IrohBackend {
     pub async fn fetch_ticket(&self, _ticket: &str) -> Result<Vec<u8>, BackendError> {
         Err(BackendError::unsupported(
             "iroh fetch requires the iroh-backend feature",
+        ))
+    }
+
+    pub async fn fetch_ticket_to_file(
+        &self,
+        _ticket: &str,
+        _target: &std::path::Path,
+    ) -> Result<(String, u64), BackendError> {
+        Err(BackendError::unsupported(
+            "iroh fetch requires the iroh-backend feature",
+        ))
+    }
+
+    pub async fn export_to_file(
+        &self,
+        _cid: &str,
+        _target: &std::path::Path,
+    ) -> Result<u64, BackendError> {
+        Err(BackendError::unsupported(
+            "iroh export requires the iroh-backend feature",
         ))
     }
 

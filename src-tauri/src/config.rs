@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 /// 应用配置
@@ -116,7 +117,7 @@ impl AppConfig {
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
         // 写入文件
-        fs::write(config_path, content)
+        crate::atomic_file::write_atomic(config_path, content.as_bytes())
             .map_err(|e| format!("Failed to write config file: {}", e))?;
 
         tracing::info!("Config saved successfully");
@@ -139,15 +140,8 @@ impl AppConfig {
 
     /// 验证配置的有效性
     pub fn validate(&self) -> Result<(), String> {
-        // 验证 API 地址格式
-        if !self.api_addr.starts_with("http://") && !self.api_addr.starts_with("https://") {
-            return Err("API address must start with http:// or https://".to_string());
-        }
-
-        // 验证 Gateway 地址格式
-        if !self.gateway_addr.starts_with("http://") && !self.gateway_addr.starts_with("https://") {
-            return Err("Gateway address must start with http:// or https://".to_string());
-        }
+        validate_service_url(&self.api_addr, true)?;
+        validate_service_url(&self.gateway_addr, false)?;
 
         // 验证 IPFS 路径（如果指定了）
         if let Some(ref path) = self.ipfs_path {
@@ -167,6 +161,41 @@ impl AppConfig {
 
         Ok(())
     }
+}
+
+fn validate_service_url(value: &str, api: bool) -> Result<(), String> {
+    let parsed =
+        reqwest::Url::parse(value).map_err(|_| "address must be a valid URL".to_string())?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err("address must use http or https".into());
+    }
+    if parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("address cannot contain credentials, query, or fragment".into());
+    }
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| "address must specify a known port".to_string())?;
+    if port == 0 {
+        return Err("address port is invalid".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "address host is required".to_string())?;
+    let local = host == "localhost"
+        || host == "ip6-localhost"
+        || host
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+    if api && !local && scheme != "https" {
+        return Err("remote API addresses must use HTTPS".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -41,8 +41,8 @@ export default function IpnsManager({
   return (
     <div className="ipns-section">
       <div className="section-header">
-        <div><span className="section-kicker">PUBLISHING</span><h2>{t("ipnsManagement")}</h2><p className="section-description">Publish mutable names while private keys remain managed by Kubo.</p></div>
-        <button onClick={loadKeyList} disabled={!isRunning} className="btn-small">{t("refresh")}</button>
+        <div><span className="section-kicker">PUBLISHING</span><h2>{t("ipnsManagement")}</h2><p className="section-description">{t("ipnsDescription")}</p></div>
+        <button onClick={loadKeyList} className="btn-small">{t("refresh")}</button>
       </div>
 
       {/* ── IPNS 发布 ── */}
@@ -50,19 +50,19 @@ export default function IpnsManager({
         <h3><Icon name="upload"/> {t("ipnsPublish")}</h3>
         <div className="input-row">
           <input type="text" className="cid-input" placeholder={t("enterCidToPublish")}
-            value={ipnsCid} onChange={(e) => setIpnsCid(e.target.value)} disabled={!isRunning} />
+            value={ipnsCid} onChange={(e) => setIpnsCid(e.target.value)} />
         </div>
         <div className="input-row">
           <input type="text" className="cid-input small-input" placeholder={t("keyName")}
-            value={ipnsKeyName} onChange={(e) => setIpnsKeyName(e.target.value)} disabled={!isRunning} />
+            value={ipnsKeyName} onChange={(e) => setIpnsKeyName(e.target.value)} />
           <select className="select-input" value={ipnsLifetime}
-            onChange={(e) => setIpnsLifetime(e.target.value)} disabled={!isRunning}>
+            onChange={(e) => setIpnsLifetime(e.target.value)}>
             <option value="24h">24h</option>
             <option value="48h">48h</option>
             <option value="72h">72h</option>
             <option value="168h">7d</option>
           </select>
-          <button onClick={publishIpns} disabled={!isRunning || !ipnsCid.trim()} className="btn-small btn-pin">
+          <button onClick={publishIpns} disabled={!ipnsCid.trim()} className="btn-small btn-pin">
             <Icon name="upload"/> {t("publish")}
           </button>
         </div>
@@ -76,8 +76,8 @@ export default function IpnsManager({
         <h3><Icon name="download"/> {t("ipnsResolve")}</h3>
         <div className="input-row">
           <input type="text" className="cid-input" placeholder={t("enterIpnsName")}
-            value={ipnsResolveName} onChange={(e) => setIpnsResolveName(e.target.value)} disabled={!isRunning} />
-          <button onClick={resolveIpns} disabled={!isRunning || !ipnsResolveName.trim()} className="btn-small btn-download">
+            value={ipnsResolveName} onChange={(e) => setIpnsResolveName(e.target.value)} />
+          <button onClick={resolveIpns} disabled={!ipnsResolveName.trim()} className="btn-small btn-download">
             <Icon name="search"/> {t("resolve")}
           </button>
         </div>
@@ -91,8 +91,8 @@ export default function IpnsManager({
         <h3><Icon name="key"/> {t("keyManagement")}</h3>
         <div className="input-row">
           <input type="text" className="cid-input small-input" placeholder={t("newKeyLabel")}
-            value={newKeyLabel} onChange={(e) => setNewKeyLabel(e.target.value)} disabled={!isRunning} />
-          <button onClick={generateNewKey} disabled={!isRunning || !newKeyLabel.trim()} className="btn-small btn-download">
+            value={newKeyLabel} onChange={(e) => setNewKeyLabel(e.target.value)} />
+          <button onClick={generateNewKey} disabled={!newKeyLabel.trim()} className="btn-small btn-download">
             + {t("generateKey")}
           </button>
         </div>
@@ -108,8 +108,7 @@ export default function IpnsManager({
                     <td className="key-label-cell">{k.label}</td>
                     <td><button className="hash-button" title={k.ipns_name} onClick={() => copy(k.ipns_name)}>{shortHash(k.ipns_name)} {copied === k.ipns_name ? <span className="copied-label">{t("copied")}</span> : <Icon name="copy"/>}</button></td>
                     <td>
-                      <button onClick={() => setConfirmLabel(k.label)} className="btn-small btn-danger"
-                        disabled={!isRunning}><Icon name="xmark"/></button>
+                      <button onClick={() => setConfirmLabel(k.label)} className="btn-small btn-danger"><Icon name="xmark"/></button>
                       {confirmLabel === k.label && <div className="confirm-popover"><span>{t("confirmDeleteKey")}</span><button onClick={() => { deleteKeyByLabel(k.label); setConfirmLabel(null); }}>{t("confirm")}</button><button onClick={() => setConfirmLabel(null)}>{t("cancel")}</button></div>}
                     </td>
                   </tr>

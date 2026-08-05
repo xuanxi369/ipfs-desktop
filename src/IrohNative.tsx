@@ -18,14 +18,23 @@ interface IrohNativeProps {
   irohAddFile: () => Promise<void>;
   irohShare: () => Promise<void>;
   irohFetch: () => Promise<void>;
+  irohKeep: () => Promise<void>;
+  irohShutdown: () => Promise<void>;
+  irohUnkeep: () => Promise<void>;
+  irohRegisterTicket: () => Promise<void>;
 }
 
 export default function IrohNative({
   irohInfo, irohCid, irohTicket, irohFetchInput, irohFetchResult, irohBusy, routePolicy,
   setError, setIrohFetchInput, setRoutePolicy,
-  loadIrohInfo, irohAddFile, irohShare, irohFetch,
+  loadIrohInfo, irohAddFile, irohShare, irohFetch, irohKeep, irohShutdown, irohUnkeep, irohRegisterTicket,
 }: IrohNativeProps) {
   const { t } = useTranslation();
+  const policyDetails: Record<string, string> = {
+    KuboOnly: "All operations use Kubo. Best compatibility with the public IPFS network.",
+    Auto: "Uses recorded content origin, local iroh discovery, then CID heuristics. Reads may fall back across backends and registered iroh providers.",
+    IrohOnly: "Forces iroh. Kubo CID, Pin and IPNS operations may be unavailable.",
+  };
 
   async function applyRoutePolicy(policy: string) {
     try {
@@ -33,7 +42,7 @@ export default function IrohNative({
       setRoutePolicy(p);
       setError("");
     } catch (e) {
-      setError(`route policy: ${formatError(e)}`);
+      setError(`Unable to switch route policy to ${policy}: ${formatError(e)}`);
     }
   }
 
@@ -73,6 +82,8 @@ export default function IrohNative({
               <button onClick={irohShare} disabled={irohBusy} className="btn-small btn-download">
                 <Icon name="ticket"/> {t("shareTicket")}
               </button>
+              <button onClick={irohKeep} disabled={irohBusy} className="btn-small btn-pin">Keep</button>
+              <button onClick={irohUnkeep} disabled={irohBusy} className="btn-small">Unkeep</button>
             </div>
           </>
         )}
@@ -102,8 +113,14 @@ export default function IrohNative({
           <button onClick={irohFetch} disabled={irohBusy || !irohFetchInput.trim()} className="btn-small btn-download">
             <Icon name="download"/> {t("fetchTicket")}
           </button>
+          <button onClick={irohRegisterTicket} disabled={irohBusy || !irohFetchInput.trim()} className="btn-small">Register only</button>
         </div>
         {irohFetchResult && <div className="ipns-result success">{irohFetchResult}</div>}
+      </div>
+
+      <div className="ipns-card">
+        <h3>Lifecycle</h3>
+        <button onClick={irohShutdown} disabled={irohBusy} className="btn-small btn-download">Shutdown iroh</button>
       </div>
 
       {/* ── 双栈路由策略 ── */}
@@ -116,6 +133,7 @@ export default function IrohNative({
             <option value="IrohOnly">IrohOnly</option>
           </select>
         </div>
+        <p className="route-explanation"><strong>{routePolicy}:</strong> {policyDetails[routePolicy]}</p>
         <p style={{ fontSize: "0.85em", opacity: 0.7 }}>{t("routePolicyHint")}</p>
       </div>
     </div>

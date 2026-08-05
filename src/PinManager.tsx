@@ -26,8 +26,8 @@ export default function PinManager({
   return (
     <div className="pins-section">
       <div className="section-header">
-        <div><span className="section-kicker">RETENTION</span><h2>{t("pinManagement")}</h2><p className="section-description">Keep important content available on this node.</p></div>
-        <button onClick={loadPins} disabled={!isRunning || pinLoading} className="btn-small">
+        <div><span className="section-kicker">RETENTION</span><h2>{t("pinManagement")}</h2><p className="section-description">{t("pinDescription")}</p></div>
+        <button onClick={loadPins} disabled={pinLoading} className="btn-small">
           {pinLoading ? <span className="spinner"/> : <Icon name="activity"/>} {t("refresh")}
         </button>
       </div>
@@ -40,9 +40,8 @@ export default function PinManager({
           placeholder={t("enterCidToPin")}
           value={pinCid}
           onChange={(e) => setPinCid(e.target.value)}
-          disabled={!isRunning}
         />
-        <button onClick={addPinByCid} disabled={!isRunning || !pinCid.trim()} className="btn-small btn-pin">
+        <button onClick={addPinByCid} disabled={!pinCid.trim()} className="btn-small btn-pin">
           <Icon name="pins"/> {t("pin")}
         </button>
       </div>
@@ -68,7 +67,6 @@ export default function PinManager({
                     <button
                       onClick={() => setConfirmCid(pin.Cid)}
                       className="btn-small btn-danger"
-                      disabled={!isRunning}
                     >
                       {t("unpin")}
                     </button>

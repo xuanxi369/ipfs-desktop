@@ -19,6 +19,7 @@ import PinManager from "./PinManager";
 import IpnsManager from "./IpnsManager";
 import IrohNative from "./IrohNative";
 import { Icon } from "./Icons";
+import AdvancedTools from "./AdvancedTools";
 
 // ── 主组件 ──
 
@@ -162,6 +163,11 @@ function App() {
     catch (e) { setError(`Failed to get status: ${formatError(e)}`); }
   }
   async function loadContentRecords() { try { setContentRecords(await invoke<ContentRecord[]>("list_content")); } catch (e) { setError(`Content index failed: ${formatError(e)}`); } }
+  async function removeContentRecord(cid: string) { try { await invoke("remove_content_record", { cid }); await loadContentRecords(); } catch (e) { setError(`Content record: ${formatError(e)}`); } }
+  async function irohKeep() { if (!irohCid.trim()) return; try { await invoke("iroh_keep", { cid: irohCid.trim() }); setError(""); } catch (e) { setError(`iroh keep: ${formatError(e)}`); } }
+  async function irohShutdown() { try { await invoke("iroh_shutdown"); setError(""); } catch (e) { setError(`iroh shutdown: ${formatError(e)}`); } }
+  async function irohUnkeep() { if (!irohCid.trim()) return; try { await invoke("iroh_unkeep", { cid: irohCid.trim() }); setError(""); } catch (e) { setError(`iroh unkeep: ${formatError(e)}`); } }
+  async function irohRegisterTicket() { if (!irohFetchInput.trim()) return; try { const cid = await invoke<string>("iroh_register_ticket", { ticket: irohFetchInput.trim() }); setIrohFetchResult(`Registered provider for ${cid}`); setError(""); } catch (e) { setError(`iroh register: ${formatError(e)}`); } }
 
   // ── 守护进程操作 ──
   async function startDaemon() {
@@ -202,8 +208,15 @@ function App() {
     if (!downloadCid.trim()) return;
     try {
       const data = await invoke<number[]>("cat_file", { cid: downloadCid.trim() });
-      const text = new TextDecoder().decode(new Uint8Array(data));
-      setCatResult(text.slice(0, 5000));
+      const bytes = new Uint8Array(data);
+      const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      const binary = bytes.includes(0) || text.includes("\uFFFD");
+      if (binary) {
+        const hex = Array.from(bytes.slice(0, 256), (b) => b.toString(16).padStart(2, "0")).join(" ");
+        setCatResult(`[${t("binaryContent")} - ${bytes.length} ${t("bytes")}]\n${hex}${bytes.length > 256 ? " …" : ""}`);
+      } else {
+        setCatResult(text.slice(0, 5000));
+      }
       setError("");
     } catch (e) {
       setError(`Cat failed: ${formatError(e)}`);
@@ -479,6 +492,7 @@ function App() {
     { tab: "ipns", icon: "ipns", group: "Publishing" },
     { tab: "iroh", icon: "iroh", group: "Network" },
     { tab: "webui", icon: "web", group: "Advanced" },
+    { tab: "advanced", icon: "flask", group: "Advanced" },
   ];
   const pageTitle = t(activeTab);
   const navigate = (tab: TabName) => {
@@ -501,20 +515,19 @@ function App() {
           <button
             className={`nav-item ${activeTab === tab ? "active" : ""}`}
             onClick={() => navigate(tab)}
-            disabled={tab === "webui" && !isRunning}
           ><Icon name={icon}/><span>{t(tab)}</span>{tab === "iroh" && <em>LAB</em>}</button>
             </div>
         ))}
         </nav>
-        <div className="sidebar-status"><span className={`status-dot ${isRunning ? "online" : ""}`}/><div><strong>{isRunning ? "Node online" : "Node offline"}</strong><small>{routePolicy === "Auto" ? "Smart routing" : routePolicy}</small></div></div>
+        <div className="sidebar-status"><span className={`status-dot ${isRunning ? "online" : ""}`}/><div><strong>{isRunning ? t("nodeOnline") : t("nodeOffline")}</strong><small>{routePolicy === "Auto" ? t("smartRouting") : routePolicy}</small></div></div>
       </aside>
       <section className="workspace">
         <header className="topbar">
           <div><p className="eyebrow">IPFS DESKTOP</p><h1>{pageTitle}</h1></div>
           <div className="topbar-actions">
             <span className={`node-pill ${isRunning ? "online" : ""}`}><span className="status-dot"/>{status.type}</span>
-            <span className="route-pill">{routePolicy === "Auto" ? "Smart routing" : routePolicy}</span>
-            <button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Toggle theme"><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
+            <span className="route-pill">{routePolicy === "Auto" ? t("smartRouting") : routePolicy}</span>
+            <button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title={t("toggleTheme")}><Icon name={theme === "dark" ? "sun" : "moon"}/></button>
             <button className="icon-button" onClick={() => i18n.changeLanguage(i18n.language === "zh" ? "en" : "zh")} title={i18n.language === "zh" ? "Switch to English" : "切换到中文"} style={{fontSize:"11px",fontWeight:700,width:"auto",padding:"0 10px"}}>{i18n.language === "zh" ? "EN" : "中"}</button>
           </div>
         </header>
@@ -597,6 +610,7 @@ function App() {
           selectAndUpload={selectAndUpload}
           catByCid={catByCid}
           downloadByCid={downloadByCid}
+          removeContentRecord={removeContentRecord}
         />
       )}
 
@@ -662,12 +676,17 @@ function App() {
           irohAddFile={irohAddFile}
           irohShare={irohShare}
           irohFetch={irohFetch}
+          irohKeep={irohKeep}
+          irohShutdown={irohShutdown}
+          irohUnkeep={irohUnkeep}
+          irohRegisterTicket={irohRegisterTicket}
         />
       )}
+      {activeTab === "advanced" && <AdvancedTools isRunning={isRunning} setError={setError} config={config} onConfigSaved={setConfig} />}
 
       {/* ── 全局错误 ── */}
         </main>
-        {error && <div className="toast-error"><strong>Something went wrong</strong><span>{error}</span><button onClick={() => setError("")}>×</button></div>}
+        {error && <div className="toast-error"><strong>{t("somethingWentWrong")}</strong><span>{error}</span><button onClick={() => setError("")}>×</button></div>}
       </section>
     </div>
   );

@@ -77,7 +77,7 @@ impl IdentityStore {
     fn persist(&self, id: &NodeIdentity) {
         match serde_json::to_string_pretty(id) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&self.path, json) {
+                if let Err(e) = crate::atomic_file::write_atomic(&self.path, json.as_bytes()) {
                     tracing::warn!("failed to persist node identity: {e}");
                 }
             }

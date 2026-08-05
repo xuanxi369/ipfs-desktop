@@ -1,6 +1,9 @@
 import { useTranslation } from "react-i18next";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { loadBenchmarkHistory, recordBenchmark } from "./benchmarkHistory";
 import { Icon } from "./Icons";
+import PeerMap from "./PeerMap";
 import {
   DaemonStatus, AppConfig, DashboardStats, NodeIdentityInfo, NodeHealth,
   formatError, formatBytes, formatRate, formatUptime,
@@ -63,6 +66,7 @@ export default function Dashboard({
   startDaemon, stopDaemon, restartDaemon, loadStatus, openWebui,
   toggleAutoLaunch,
 }: DashboardProps) {
+  const [benchmarkHistory, setBenchmarkHistory] = useState(loadBenchmarkHistory);
   const { t } = useTranslation();
 
   const getStatusColor = () => {
@@ -284,6 +288,8 @@ export default function Dashboard({
         )}
       </div>
 
+      <PeerMap isRunning={isRunning} setError={setError} />
+
       {/* ── Phase 4: 后端选择器 ── */}
       <div className="backend-bar">
         <span className="backend-label"><Icon name="link"/> {t("activeBackend")}:</span>
@@ -312,6 +318,7 @@ export default function Dashboard({
             setBenchRunning(true);
             const result = await invoke<Record<string, unknown>>("run_benchmark");
             setBenchResult(result);
+            setBenchmarkHistory(recordBenchmark(result));
           } catch (e) { setError(formatError(e)); }
           finally { setBenchRunning(false); }
         }} className="btn-small btn-download" disabled={benchRunning}>
@@ -423,6 +430,7 @@ export default function Dashboard({
             ))}
           </div>
         )}
+        {benchmarkHistory.length > 0 && <div className="bench-result benchmark-history"><h3>Benchmark history</h3>{benchmarkHistory.map((r) => <div className="bench-row" key={r.timestamp}><span>{new Date(r.timestamp).toLocaleString()}</span><span>{r.winner || "—"}</span><span>{r.speedup_ratio ? `${r.speedup_ratio.toFixed(2)}x` : "—"}</span><span>{r.total_duration_ms ?? "—"}ms</span></div>)}</div>}
 
         {/* 兼容性测试结果 */}
         {compatResult && (

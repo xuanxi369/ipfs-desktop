@@ -258,28 +258,59 @@ impl AppState {
 
         match controller.start(flags).await {
             Ok(_) => {
+                let pid = controller.get_pid().await.unwrap_or(0);
+                // Store ownership immediately. Kubo may need several seconds
+                // before its RPC API starts accepting requests.
+                self.set_daemon_controller(Some(controller)).await;
                 if let Some(api_client) = self.get_api_client().await {
-                    match api_client.id().await {
-                        Ok(node_id) => {
-                            let pid = controller.get_pid().await.unwrap_or(0);
+                    let mut last_error = None;
+                    for _ in 0..60 {
+                        // swarm/peers is a reliable readiness probe on Kubo
+                        // versions whose id endpoint may return a proxy 502.
+                        if api_client.swarm_peers().await.is_ok() {
+                            let peer_id = api_client
+                                .id()
+                                .await
+                                .map(|node| node.id)
+                                .unwrap_or_else(|error| {
+                                    tracing::warn!(
+                                        "Kubo id unavailable after API became ready: {}",
+                                        error
+                                    );
+                                    "unknown".to_string()
+                                });
                             let status = DaemonStatus::Running {
                                 pid,
-                                peer_id: node_id.id.clone(),
+                                peer_id,
                                 api_addr: config.api_addr.clone(),
                             };
                             self.set_daemon_status(status.clone()).await;
                             let _ = app_handle.emit("daemon-status-changed", &status);
+                            *self.daemon_started_at.write().await = Some(now_secs());
+                            return Ok(());
+                        } else {
+                            last_error = Some(DaemonError::ApiError(
+                                "swarm/peers probe failed".to_string(),
+                            ));
                         }
-                        Err(e) => {
-                            tracing::warn!("Failed to get node ID: {}", e);
-                            self.set_daemon_status(DaemonStatus::Starting).await;
-                        }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
                     }
+                    tracing::warn!(
+                        "Kubo process is alive but RPC API did not become ready: {:?}",
+                        last_error
+                    );
                 }
-                self.set_daemon_controller(Some(controller)).await;
-                // 记录节点上线时刻（Phase D3：节点在线时长）
-                *self.daemon_started_at.write().await = Some(now_secs());
-                Ok(())
+                let error = DaemonError::ApiConnectionFailed {
+                    addr: config.api_addr,
+                    detail: "Kubo process started, but its RPC API was not ready within 15 seconds"
+                        .to_string(),
+                };
+                self.set_daemon_status(DaemonStatus::Failed {
+                    error: error.to_string(),
+                })
+                .await;
+                let _ = app_handle.emit("daemon-status-changed", &self.get_daemon_status().await);
+                Err(error)
             }
             Err(e) => {
                 self.set_daemon_status(DaemonStatus::Failed {
@@ -302,6 +333,30 @@ impl AppState {
         self.spawn_health_monitor(app_handle.clone()).await;
         self.spawn_dashboard_poller(app_handle.clone()).await;
         self.spawn_replay_loop(app_handle).await;
+        Ok(())
+    }
+
+    /// Attach to a Kubo daemon that was started outside this application.
+    /// There is deliberately no process controller: Stop means "disconnect"
+    /// and must not kill a process owned by another application or terminal.
+    pub async fn attach_existing_daemon(
+        &self,
+        app_handle: tauri::AppHandle,
+        peer_id: String,
+    ) -> Result<(), crate::error::DaemonError> {
+        let config = self.get_config().await;
+        let status = DaemonStatus::Running {
+            pid: 0,
+            peer_id,
+            api_addr: config.api_addr,
+        };
+        self.set_daemon_controller(None).await;
+        self.set_daemon_status(status.clone()).await;
+        *self.daemon_started_at.write().await = Some(now_secs());
+        let _ = app_handle.emit("daemon-status-changed", &status);
+        self.spawn_dashboard_poller(app_handle.clone()).await;
+        self.spawn_replay_loop(app_handle).await;
+        tracing::info!("Attached to an existing Kubo daemon");
         Ok(())
     }
 

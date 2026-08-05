@@ -46,6 +46,7 @@ export interface StructuredError {
   ApiParseError?: string;
   ConfigError?: string;
   IoError?: string;
+  Backend?: { kind: string; message: string };
 }
 
 export interface PinEntry {
@@ -98,7 +99,7 @@ export interface NodeHealth {
   iroh_content_count: number | null;
 }
 
-export type TabName = "dashboard" | "webui" | "files" | "pins" | "ipns" | "iroh";
+export type TabName = "dashboard" | "webui" | "files" | "pins" | "ipns" | "iroh" | "advanced";
 
 export interface DashboardTick {
   peers: { peers: { Peer: string; Addr: string }[] } | null;
@@ -126,6 +127,7 @@ export function formatError(e: unknown): string {
     if (err.ApiParseError) return `API parse error: ${err.ApiParseError}`;
     if (err.ConfigError) return `Configuration error: ${err.ConfigError}`;
     if (err.IoError) return `I/O error: ${err.IoError}`;
+    if (err.Backend) return `Backend ${err.Backend.kind}: ${err.Backend.message}`;
     return JSON.stringify(e);
   }
   return String(e);

@@ -33,11 +33,21 @@ impl KuboHashes {
         hashes.insert(
             "0.30.0".to_string(),
             PlatformHashes {
-                darwin_amd64: Some("8c9b8e3a9c1f0e5a42e7f08c0c4a9e6b5f4a8e7c9b8a7e6f5a4b3c2d1e0f9a8b"),
-                darwin_arm64: Some("7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c"),
-                linux_amd64: Some("6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b"),
-                linux_arm64: Some("5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b"),
-                windows_amd64: Some("4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b"),
+                darwin_amd64: Some(
+                    "8c9b8e3a9c1f0e5a42e7f08c0c4a9e6b5f4a8e7c9b8a7e6f5a4b3c2d1e0f9a8b",
+                ),
+                darwin_arm64: Some(
+                    "7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c",
+                ),
+                linux_amd64: Some(
+                    "6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b",
+                ),
+                linux_arm64: Some(
+                    "5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b",
+                ),
+                windows_amd64: Some(
+                    "4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b",
+                ),
             },
         );
 
@@ -45,11 +55,21 @@ impl KuboHashes {
         hashes.insert(
             "0.29.0".to_string(),
             PlatformHashes {
-                darwin_amd64: Some("3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b"),
-                darwin_arm64: Some("2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b"),
-                linux_amd64: Some("1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"),
-                linux_arm64: Some("0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b"),
-                windows_amd64: Some("9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"),
+                darwin_amd64: Some(
+                    "3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b",
+                ),
+                darwin_arm64: Some(
+                    "2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b",
+                ),
+                linux_amd64: Some(
+                    "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+                ),
+                linux_arm64: Some(
+                    "0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b",
+                ),
+                windows_amd64: Some(
+                    "9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+                ),
             },
         );
 

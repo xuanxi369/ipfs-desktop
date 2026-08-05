@@ -200,10 +200,7 @@ impl BinaryFinder {
         let version = match KuboHashes::extract_version(&version_str) {
             Some(v) => v,
             None => {
-                tracing::warn!(
-                    "Could not extract version from: {}",
-                    version_str.trim()
-                );
+                tracing::warn!("Could not extract version from: {}", version_str.trim());
                 return Ok(false);
             }
         };
@@ -225,8 +222,8 @@ impl BinaryFinder {
         };
 
         // 计算实际哈希
-        let actual_hash = Self::calculate_hash(path)
-            .map_err(|e| format!("Failed to calculate hash: {}", e))?;
+        let actual_hash =
+            Self::calculate_hash(path).map_err(|e| format!("Failed to calculate hash: {}", e))?;
 
         // 比较哈希
         let matches = actual_hash.eq_ignore_ascii_case(expected_hash);
@@ -333,9 +330,6 @@ mod tests {
         // 提供一个错误的哈希值，应该找不到二进制
         let fake_hash = "0000000000000000000000000000000000000000000000000000000000000000";
         let result = BinaryFinder::find_with_expected_hash(Some(fake_hash.to_string()));
-        assert!(
-            result.is_none(),
-            "Should not find binary with wrong hash"
-        );
+        assert!(result.is_none(), "Should not find binary with wrong hash");
     }
 }

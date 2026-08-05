@@ -1,10 +1,12 @@
 // 模块声明
+pub mod atomic_file;
 pub mod backend_router;
 pub mod backend_trait;
 pub mod bandwidth;
 pub mod benchmark;
 pub mod cache;
 pub mod commands;
+pub mod commands_mfs;
 pub mod compat_test;
 pub mod config;
 pub mod content_index;
@@ -15,6 +17,8 @@ pub mod iroh_adapter;
 pub mod keyring;
 pub mod kubo_adapter;
 pub mod offline_queue;
+pub mod path_security;
+pub mod peer_geo;
 pub mod proxy;
 pub mod state;
 pub mod tray;
@@ -71,9 +75,12 @@ pub fn run() {
     let app_state = AppState::new(config);
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
@@ -100,6 +107,7 @@ pub fn run() {
             commands::add_pin,
             commands::remove_pin,
             commands::get_dashboard_stats,
+            commands::get_peer_geography,
             commands::get_cached_dashboard,
             commands::generate_key,
             commands::list_keys,
@@ -142,14 +150,14 @@ pub fn run() {
             commands::get_binary_verification_info,
             commands::set_binary_hash,
             // MFS (Mutable File System)
-            commands::mfs_ls,
-            commands::mfs_stat,
-            commands::mfs_mkdir,
-            commands::mfs_rm,
-            commands::mfs_cp,
-            commands::mfs_mv,
-            commands::mfs_read,
-            commands::mfs_write,
+            commands_mfs::mfs_ls,
+            commands_mfs::mfs_stat,
+            commands_mfs::mfs_mkdir,
+            commands_mfs::mfs_rm,
+            commands_mfs::mfs_cp,
+            commands_mfs::mfs_mv,
+            commands_mfs::mfs_read,
+            commands_mfs::mfs_write,
         ])
         .on_window_event(|window, event| {
             // Phase D2「可长期在线」：关窗不退出，隐藏到托盘让节点后台常驻。
