@@ -153,6 +153,16 @@ COMMANDS.md                Tauri 命令索引
 - [项目文档索引](docs/README.md)
 - [项目路线图](docs/PROJECT_ROADMAP.md)
 
+---
+
+## Contributors - - 向贡献者与‘去中心化’的先驱者致敬，向人类的自由意志致敬
+
+<a href="https://github.com/xuanxi369/IPFS-Desktop-Rust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust" />
+</a>
+
+---
+
 ## 许可证
 
 仓库当前未声明统一许可证。对外发布前请补充 LICENSE 文件，并确认 Kubo、Tauri 及其他依赖的许可证要求。
