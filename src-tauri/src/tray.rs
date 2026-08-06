@@ -43,25 +43,55 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<TrayIcon> {
 }
 
 /// 托盘菜单事件处理
-fn handle_tray_event(app: &AppHandle, id: &str) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrayAction {
+    Show,
+    Hide,
+    Quit,
+    Unknown,
+}
+
+fn tray_action(id: &str) -> TrayAction {
     match id {
-        "show" => {
+        "show" => TrayAction::Show,
+        "hide" => TrayAction::Hide,
+        "quit" => TrayAction::Quit,
+        _ => TrayAction::Unknown,
+    }
+}
+
+fn handle_tray_event(app: &AppHandle, id: &str) {
+    match tray_action(id) {
+        TrayAction::Show => {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }
-        "hide" => {
+        TrayAction::Hide => {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
             }
         }
-        "quit" => {
+        TrayAction::Quit => {
             tracing::info!("Quit requested from tray menu");
             app.exit(0);
         }
-        _ => {
+        TrayAction::Unknown => {
             tracing::warn!("Unknown tray menu event: {}", id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_all_supported_tray_actions() {
+        assert_eq!(tray_action("show"), TrayAction::Show);
+        assert_eq!(tray_action("hide"), TrayAction::Hide);
+        assert_eq!(tray_action("quit"), TrayAction::Quit);
+        assert_eq!(tray_action("unexpected"), TrayAction::Unknown);
     }
 }

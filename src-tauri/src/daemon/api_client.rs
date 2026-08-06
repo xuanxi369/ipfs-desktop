@@ -1,5 +1,9 @@
+pub use super::api_models::{
+    BandwidthStats, BitswapStats, NodeId, PeerInfo, RepoStats, SwarmPeers,
+};
 use crate::error::DaemonError;
 use crate::types::AddResult;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -16,38 +20,6 @@ pub struct IpfsApiClient {
     api_addr: String,
 }
 
-/// 节点 ID 信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeId {
-    #[serde(rename = "ID")]
-    pub id: String,
-    #[serde(rename = "PublicKey")]
-    #[serde(default)]
-    pub public_key: String,
-    #[serde(rename = "Addresses")]
-    #[serde(default)]
-    pub addresses: Vec<String>,
-    #[serde(rename = "AgentVersion")]
-    #[serde(default)]
-    pub agent_version: String,
-    #[serde(rename = "ProtocolVersion")]
-    #[serde(default)]
-    pub protocol_version: String,
-}
-
-/// 仓库统计信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RepoStats {
-    #[serde(rename = "NumObjects")]
-    pub num_objects: u64,
-    #[serde(rename = "RepoSize")]
-    pub repo_size: u64,
-    #[serde(rename = "RepoPath")]
-    pub repo_path: String,
-    #[serde(rename = "Version")]
-    pub version: String,
-}
-
 /// 版本信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionInfo {
@@ -61,22 +33,6 @@ pub struct VersionInfo {
     pub system: String,
     #[serde(rename = "Golang")]
     pub golang: String,
-}
-
-/// Swarm 连接信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SwarmPeers {
-    #[serde(rename = "Peers")]
-    pub peers: Vec<PeerInfo>,
-}
-
-/// 对等节点信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PeerInfo {
-    #[serde(rename = "Peer")]
-    pub peer: String,
-    #[serde(rename = "Addr")]
-    pub addr: String,
 }
 
 /// Pin 列表
@@ -108,44 +64,6 @@ pub struct PinAddResult {
 pub struct PinRmResult {
     #[serde(rename = "Pins")]
     pub pins: Vec<String>,
-}
-
-/// 带宽统计
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BandwidthStats {
-    #[serde(rename = "TotalIn")]
-    pub total_in: u64,
-    #[serde(rename = "TotalOut")]
-    pub total_out: u64,
-    #[serde(rename = "RateIn")]
-    pub rate_in: f64,
-    #[serde(rename = "RateOut")]
-    pub rate_out: f64,
-}
-
-/// Bitswap 统计
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BitswapStats {
-    #[serde(rename = "ProvideBufLen")]
-    pub provide_buf_len: i64,
-    #[serde(rename = "Wantlist")]
-    #[serde(default)]
-    pub wantlist: Vec<String>,
-    #[serde(rename = "Peers")]
-    #[serde(default)]
-    pub peers: Vec<String>,
-    #[serde(rename = "BlocksReceived")]
-    pub blocks_received: u64,
-    #[serde(rename = "DataReceived")]
-    pub data_received: u64,
-    #[serde(rename = "BlocksSent")]
-    pub blocks_sent: u64,
-    #[serde(rename = "DataSent")]
-    pub data_sent: u64,
-    #[serde(rename = "DupBlksReceived")]
-    pub dup_blks_received: u64,
-    #[serde(rename = "DupDataReceived")]
-    pub dup_data_received: u64,
 }
 
 /// IPNS 发布结果
@@ -192,10 +110,34 @@ pub struct KeyEntry {
 impl IpfsApiClient {
     /// 创建新的 API 客户端
     pub fn new(api_addr: String) -> Self {
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
+            // Never let system/corporate proxies intercept Kubo control traffic.
+            .no_proxy();
+
+        // Pin DNS answers into the client. The original hostname remains in the
+        // URL, so HTTPS still validates the certificate against that hostname.
+        if let Ok(url) = reqwest::Url::parse(&api_addr) {
+            if let Some(host) = url.host_str() {
+                if host.parse::<std::net::IpAddr>().is_err() {
+                    if let Ok(addresses) = crate::config::resolved_endpoint_addrs(&api_addr) {
+                        builder = builder.resolve_to_addrs(host, &addresses);
+                    }
+                }
+            }
+        }
+
+        // Optional reverse-proxy authentication without persisting secrets in
+        // config.json. Expected value includes the scheme, e.g. "Bearer ...".
+        if let Ok(value) = std::env::var("IPFS_API_AUTHORIZATION") {
+            if let Ok(value) = HeaderValue::from_str(&value) {
+                let mut headers = HeaderMap::new();
+                headers.insert(AUTHORIZATION, value);
+                builder = builder.default_headers(headers);
+            }
+        }
+
+        let client = builder.build().expect("Failed to create HTTP client");
 
         Self { client, api_addr }
     }
@@ -820,10 +762,15 @@ impl IpfsApiClient {
             )));
         }
 
-        let stats: BitswapStats = response
-            .json()
-            .await
-            .map_err(|e| DaemonError::ApiParseError(e.to_string()))?;
+        let body = response.bytes().await.map_err(|e| {
+            DaemonError::ApiParseError(format!("unable to read bitswap/stat body: {e}"))
+        })?;
+        let stats: BitswapStats = serde_json::from_slice(&body).map_err(|e| {
+            let preview: String = String::from_utf8_lossy(&body).chars().take(512).collect();
+            DaemonError::ApiParseError(format!(
+                "bitswap/stat JSON did not match the Kubo contract: {e}; body={preview}"
+            ))
+        })?;
         Ok(stats)
     }
 
@@ -1340,6 +1287,61 @@ pub struct MfsStatResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn mock_kubo_once(status: &str, body: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock Kubo");
+        let address = listener.local_addr().expect("mock address");
+        let status = status.to_string();
+        let body = body.to_string();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = vec![0; 4096];
+            let size = socket.read(&mut request).await.expect("read request");
+            let request = String::from_utf8_lossy(&request[..size]);
+            assert!(request.starts_with("POST /api/v0/id "));
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("write response");
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn test_id_against_mock_kubo_http_contract() {
+        let endpoint = mock_kubo_once(
+            "200 OK",
+            r#"{"ID":"12D3KooWmock","AgentVersion":"kubo/0.42.0","Addresses":[]}"#,
+        )
+        .await;
+        let node = IpfsApiClient::new(endpoint).id().await.expect("mock id");
+        assert_eq!(node.id, "12D3KooWmock");
+        assert_eq!(node.agent_version, "kubo/0.42.0");
+    }
+
+    #[test]
+    fn test_dashboard_types_accept_kubo_and_serialize_snake_case() {
+        let peers: SwarmPeers = serde_json::from_value(serde_json::json!({
+            "Peers": [{ "Peer": "12D3KooWtest", "Addr": "/ip4/127.0.0.1/tcp/4001" }]
+        }))
+        .expect("Kubo response should deserialize");
+        let json = serde_json::to_value(&peers).expect("IPC response should serialize");
+
+        assert_eq!(json["peers"][0]["peer"], "12D3KooWtest");
+        assert_eq!(json["peers"][0]["addr"], "/ip4/127.0.0.1/tcp/4001");
+        assert!(json.get("Peers").is_none());
+
+        let cached: SwarmPeers =
+            serde_json::from_value(json).expect("snake_case cache should deserialize");
+        assert_eq!(cached.peers.len(), 1);
+    }
 
     #[tokio::test]
     async fn test_api_client_creation() {

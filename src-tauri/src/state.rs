@@ -140,8 +140,14 @@ impl AppState {
 
         // Phase C: 双栈路由器（默认 KuboOnly，行为等价现有单栈）
         // 来源标记 / provider 持久化到 cache_dir/{cid_origins,cid_providers}.json
-        let initial_policy = crate::backend_router::RoutePolicy::parse(&config.route_policy)
-            .unwrap_or(crate::backend_router::RoutePolicy::KuboOnly);
+        let legacy_policy = crate::backend_router::RoutePolicy::parse(&config.route_policy)
+            .unwrap_or(crate::backend_router::RoutePolicy::IrohOnly);
+        let usage_mode = config
+            .usage_mode
+            .as_deref()
+            .and_then(crate::backend_router::UsageMode::parse)
+            .unwrap_or_else(|| crate::backend_router::UsageMode::from_legacy(legacy_policy));
+        let initial_policy = usage_mode.route_policy();
         let backend_router = Arc::new(crate::backend_router::BackendRouter::new_with_policy(
             kubo_backend.clone(),
             iroh_backend.clone(),
@@ -268,17 +274,18 @@ impl AppState {
                         // swarm/peers is a reliable readiness probe on Kubo
                         // versions whose id endpoint may return a proxy 502.
                         if api_client.swarm_peers().await.is_ok() {
-                            let peer_id = api_client
-                                .id()
-                                .await
-                                .map(|node| node.id)
-                                .unwrap_or_else(|error| {
-                                    tracing::warn!(
-                                        "Kubo id unavailable after API became ready: {}",
-                                        error
-                                    );
-                                    "unknown".to_string()
-                                });
+                            let peer_id =
+                                api_client
+                                    .id()
+                                    .await
+                                    .map(|node| node.id)
+                                    .unwrap_or_else(|error| {
+                                        tracing::warn!(
+                                            "Kubo id unavailable after API became ready: {}",
+                                            error
+                                        );
+                                        "unknown".to_string()
+                                    });
                             let status = DaemonStatus::Running {
                                 pid,
                                 peer_id,

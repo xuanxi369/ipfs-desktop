@@ -89,11 +89,21 @@ impl BinaryFinder {
         #[cfg(windows)]
         let binary_name = "ipfs.exe";
 
-        let candidates = vec![
+        let mut candidates = vec![
             app_dir.join(binary_name),
             app_dir.join("bin").join(binary_name),
             app_dir.join("resources").join(binary_name),
         ];
+
+        // `tauri dev` runs the executable from target/debug rather than from
+        // the final bundle. Include the source resource directory only in
+        // debug builds so developers use the same verified Kubo sidecar.
+        #[cfg(debug_assertions)]
+        candidates.push(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("resources")
+                .join(binary_name),
+        );
 
         candidates.into_iter().find(|candidate| {
             candidate.exists() && Self::verify_binary_with_hash(candidate, expected_hash)

@@ -17,13 +17,11 @@
 //! ## 现状与边界（诚实）
 //!
 //! - **策略**已可切换：`KuboOnly`（现网互操作，默认）/ `IrohOnly` / `Auto`（按内容分类）。
-//! - **分类**目前是**基于前缀的启发式**（`classify_cid`）：IPFS CID（`Qm...` / `bafy/bafk...`）
-//!   判为 Kubo，其余判为 iroh 的 BLAKE3 内容。这是骨架级实现——由于两套哈希在字符串形态上
-//!   可能重叠，**生产级 Phase C 需要「内容来源标记」而非纯前缀猜测**。此处刻意保留可测的
-//!   确定性行为，并把这一限制显式写在类型与测试里。
+//! - **分类**使用 `ContentRef`、来源记录和本地内容探测。IPFS 引用必须能被 CID crate
+//!   严格解析；iroh 引用必须显式写为 `iroh:<hash>`，或来自可信记录/实际探测。
 //! - 默认策略为 `KuboOnly`，即在路由层被显式启用前，行为与现有单栈完全一致（零回归）。
 
-use crate::backend_trait::{AddOutput, Backend, BackendError, BackendType};
+use crate::backend_trait::{AddOutput, BackendError, BackendType, ContentBackend, ContentRef};
 use crate::iroh_adapter::IrohBackend;
 use crate::kubo_adapter::KuboBackend;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -31,6 +29,58 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentMapping {
+    pub kubo_cid: String,
+    pub iroh_hash: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UsageMode {
+    LocalFirst,
+    Compatible,
+    Mirrored,
+}
+
+impl UsageMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "localfirst" | "local_first" | "local" => Some(Self::LocalFirst),
+            "compatible" | "compatibility" => Some(Self::Compatible),
+            "mirrored" | "mirror" => Some(Self::Mirrored),
+            _ => None,
+        }
+    }
+
+    pub fn route_policy(self) -> RoutePolicy {
+        match self {
+            Self::LocalFirst => RoutePolicy::IrohOnly,
+            Self::Compatible => RoutePolicy::Auto,
+            Self::Mirrored => RoutePolicy::Mirror,
+        }
+    }
+
+    pub fn from_legacy(policy: RoutePolicy) -> Self {
+        match policy {
+            RoutePolicy::IrohOnly => Self::LocalFirst,
+            RoutePolicy::Mirror => Self::Mirrored,
+            RoutePolicy::KuboOnly | RoutePolicy::Auto => Self::Compatible,
+        }
+    }
+}
+
+impl std::fmt::Display for UsageMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LocalFirst => write!(f, "LocalFirst"),
+            Self::Compatible => write!(f, "Compatible"),
+            Self::Mirrored => write!(f, "Mirrored"),
+        }
+    }
+}
 
 /// 从 JSON 文件载入一个 `String -> V` 映射（文件不存在/损坏时返回空表）
 fn load_json_map<V: DeserializeOwned>(path: &Option<PathBuf>) -> HashMap<String, V> {
@@ -60,8 +110,10 @@ pub enum RoutePolicy {
     KuboOnly,
     /// 全部走 iroh 原生
     IrohOnly,
-    /// 按内容分类自动选择（`classify_cid`）
+    /// 按经过验证的内容引用自动选择
     Auto,
+    /// Write to both backends and expose the Kubo CID as the primary reference.
+    Mirror,
 }
 
 impl RoutePolicy {
@@ -70,6 +122,7 @@ impl RoutePolicy {
             "kubo" | "kubo_only" | "kuboonly" => Some(Self::KuboOnly),
             "iroh" | "iroh_only" | "irohonly" => Some(Self::IrohOnly),
             "auto" => Some(Self::Auto),
+            "mirror" => Some(Self::Mirror),
             _ => None,
         }
     }
@@ -81,6 +134,7 @@ impl std::fmt::Display for RoutePolicy {
             RoutePolicy::KuboOnly => write!(f, "KuboOnly"),
             RoutePolicy::IrohOnly => write!(f, "IrohOnly"),
             RoutePolicy::Auto => write!(f, "Auto"),
+            RoutePolicy::Mirror => write!(f, "Mirror"),
         }
     }
 }
@@ -97,13 +151,15 @@ pub struct BackendRouter {
     /// CID → 已知 iroh provider 的 ticket（用于网络 fallback / 跨节点内容发现）
     providers: Arc<RwLock<HashMap<String, String>>>,
     providers_path: Option<PathBuf>,
+    mappings: Arc<RwLock<HashMap<String, ContentMapping>>>,
+    mappings_path: Option<PathBuf>,
 }
 
 impl BackendRouter {
     /// `data_dir` 为空时来源标记 / provider 仅存内存（测试用）；
     /// 否则分别持久化到 `<data_dir>/cid_origins.json` 与 `<data_dir>/cid_providers.json`。
     pub fn new(kubo: Arc<KuboBackend>, iroh: Arc<IrohBackend>, data_dir: Option<PathBuf>) -> Self {
-        Self::new_with_policy(kubo, iroh, data_dir, RoutePolicy::KuboOnly)
+        Self::new_with_policy(kubo, iroh, data_dir, RoutePolicy::Auto)
     }
 
     pub fn new_with_policy(
@@ -114,10 +170,12 @@ impl BackendRouter {
     ) -> Self {
         let origins_path = data_dir.as_ref().map(|d| d.join("cid_origins.json"));
         let providers_path = data_dir.as_ref().map(|d| d.join("cid_providers.json"));
+        let mappings_path = data_dir.as_ref().map(|d| d.join("content_mappings.json"));
 
         // 启动时从磁盘恢复
         let origins = load_json_map::<BackendType>(&origins_path);
         let providers = load_json_map::<String>(&providers_path);
+        let mappings = load_json_map::<ContentMapping>(&mappings_path);
 
         Self {
             kubo,
@@ -128,6 +186,8 @@ impl BackendRouter {
             origins_path,
             providers: Arc::new(RwLock::new(providers)),
             providers_path,
+            mappings: Arc::new(RwLock::new(mappings)),
+            mappings_path,
         }
     }
 
@@ -189,12 +249,35 @@ impl BackendRouter {
         self.providers.read().await.get(cid.trim()).cloned()
     }
 
+    pub async fn known_mapping(&self, reference: &str) -> Option<ContentMapping> {
+        self.mappings.read().await.get(reference.trim()).cloned()
+    }
+
+    async fn record_mapping(&self, mapping: ContentMapping) {
+        {
+            let mut mappings = self.mappings.write().await;
+            mappings.insert(mapping.kubo_cid.clone(), mapping.clone());
+            mappings.insert(mapping.iroh_hash.clone(), mapping);
+        }
+        let snapshot = self.mappings.read().await.clone();
+        persist_json_map(&self.mappings_path, &snapshot);
+    }
+
+    pub async fn mapping_count(&self) -> usize {
+        let mappings = self.mappings.read().await;
+        mappings
+            .values()
+            .map(|mapping| mapping.kubo_cid.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    }
+
     /// 网络 fallback：若已知该 CID 的 iroh provider，则从网络拉取（仅 `Auto`）。
     ///
     /// 返回 `None` 表示「无网络 provider 可试」；`Some(Ok/Err)` 为一次实际尝试结果。
     /// 成功后回填来源标记为 iroh（自愈，下次可直达本地）。
     pub async fn try_network_fetch(&self, cid: &str) -> Option<Result<Vec<u8>, BackendError>> {
-        if !matches!(self.policy().await, RoutePolicy::Auto) {
+        if !matches!(self.policy().await, RoutePolicy::Auto | RoutePolicy::Mirror) {
             return None;
         }
         let ticket = self.known_provider(cid).await?;
@@ -212,60 +295,58 @@ impl BackendRouter {
         }
     }
 
-    /// 基于前缀的**启发式**内容分类（仅在无来源标记时作为回退）。
-    ///
-    /// - IPFS CID（`Qm...` v0 / `baf...` v1 常见多编码前缀）→ Kubo
-    /// - 其余（含 iroh 的 BLAKE3 内容哈希）→ Iroh
-    pub fn classify_cid(cid: &str) -> BackendType {
-        let c = cid.trim();
-        let looks_ipfs = c.starts_with("Qm")            // CIDv0 base58btc
-            || c.starts_with("baf")                     // CIDv1 base32（bafy/bafk/bafr/bafz/baga...）
-            || c.starts_with("bag")
-            || c.starts_with("Qmb");
-        if looks_ipfs {
-            BackendType::Kubo
-        } else {
-            BackendType::Iroh
-        }
-    }
-
     /// 针对某个 CID 的读操作，按当前策略决定后端。
     ///
     /// `Auto` 决策链（按内容实际所在路由，Phase C 核心）：
     /// 1. **来源标记**（已知事实）——最强；
-    /// 2. **内容发现**——iroh 本地确有该 blob 则走 iroh（不靠猜测，靠实测）；
-    /// 3. **前缀启发式**——兜底（`Qm.../baf...` → Kubo，其余 → iroh）。
-    pub async fn choose_for_cid(&self, cid: &str) -> BackendType {
+    /// 2. **provider 记录**——已有 iroh ticket 是可验证的来源证据；
+    /// 3. **内容发现**——iroh 本地确有该 blob 则走 iroh（不靠猜测，靠实测）；
+    /// 4. **严格解析**——合法 CID 走 Kubo；iroh 必须显式标注或已被实际发现。
+    pub async fn choose_for_cid(&self, cid: &str) -> Result<BackendType, BackendError> {
         match self.policy().await {
-            RoutePolicy::KuboOnly => BackendType::Kubo,
-            RoutePolicy::IrohOnly => BackendType::Iroh,
+            RoutePolicy::KuboOnly => Ok(BackendType::Kubo),
+            RoutePolicy::IrohOnly => Ok(BackendType::Iroh),
+            RoutePolicy::Mirror => {
+                if let Some(mapping) = self.known_mapping(cid).await {
+                    if cid.trim() == mapping.iroh_hash {
+                        Ok(BackendType::Iroh)
+                    } else {
+                        Ok(BackendType::Kubo)
+                    }
+                } else {
+                    ContentRef::parse(cid).map(|reference| reference.backend_type())
+                }
+            }
             RoutePolicy::Auto => {
                 // 1. 已知来源标记
                 if let Some(t) = self.known_origin(cid).await {
-                    return t;
+                    return Ok(t);
                 }
-                // 2. 内容发现：iroh 本地真有该 blob 就走 iroh
+                // 2. 已登记 provider：ticket 明确指向 iroh 网络内容。
+                if self.known_provider(cid).await.is_some() {
+                    return Ok(BackendType::Iroh);
+                }
+                // 3. 内容发现：iroh 本地真有该 blob 就走 iroh
                 if self.iroh.has(cid).await.unwrap_or(false) {
-                    return BackendType::Iroh;
+                    return Ok(BackendType::Iroh);
                 }
-                // 3. 兜底启发式
-                Self::classify_cid(cid)
+                ContentRef::parse(cid).map(|reference| reference.backend_type())
             }
         }
     }
 
-    /// 写操作（add）后端选择：可带偏好；无偏好时按策略（Auto 默认落 Kubo 以保证公网可寻址）
+    /// 写操作（add）后端选择：可带偏好；Auto 默认写入 iroh，Kubo 仅用于按需兼容。
     pub async fn choose_for_add(&self, prefer: Option<BackendType>) -> BackendType {
         if let Some(p) = prefer {
             return p;
         }
         match self.policy().await {
-            RoutePolicy::KuboOnly | RoutePolicy::Auto => BackendType::Kubo,
-            RoutePolicy::IrohOnly => BackendType::Iroh,
+            RoutePolicy::KuboOnly | RoutePolicy::Mirror => BackendType::Kubo,
+            RoutePolicy::IrohOnly | RoutePolicy::Auto => BackendType::Iroh,
         }
     }
 
-    fn backend(&self, t: BackendType) -> &dyn Backend {
+    fn content_backend(&self, t: BackendType) -> &dyn ContentBackend {
         match t {
             BackendType::Kubo => self.kubo.as_ref(),
             BackendType::Iroh => self.iroh.as_ref(),
@@ -276,16 +357,16 @@ impl BackendRouter {
     ///
     /// `Auto` 下返回 `[主选, 另一个]`——即「主后端取不到就 fallback」；
     /// `KuboOnly`/`IrohOnly` 是显式选择，只返回单个后端，不做跨栈 fallback。
-    pub async fn cat_order(&self, cid: &str) -> Vec<BackendType> {
-        let primary = self.choose_for_cid(cid).await;
+    pub async fn cat_order(&self, cid: &str) -> Result<Vec<BackendType>, BackendError> {
+        let primary = self.choose_for_cid(cid).await?;
         if matches!(self.policy().await, RoutePolicy::Auto) {
             let other = match primary {
                 BackendType::Kubo => BackendType::Iroh,
                 BackendType::Iroh => BackendType::Kubo,
             };
-            vec![primary, other]
+            Ok(vec![primary, other])
         } else {
-            vec![primary]
+            Ok(vec![primary])
         }
     }
 
@@ -294,10 +375,24 @@ impl BackendRouter {
     /// 主后端失败时（Auto 下）自动试另一个；fallback 命中后回填来源标记（自愈，
     /// 下次直达）。全部失败则返回**主后端**的错误（信息量更大）。
     pub async fn cat(&self, cid: &str) -> Result<(BackendType, Vec<u8>), BackendError> {
-        let order = self.cat_order(cid).await;
+        if matches!(self.policy().await, RoutePolicy::Mirror) {
+            let mapping = self
+                .known_mapping(cid)
+                .await
+                .ok_or_else(|| BackendError::not_found("content has no verified mirror mapping"))?;
+            let (kubo, iroh) = tokio::join!(
+                self.kubo.cat(&mapping.kubo_cid),
+                self.iroh.cat(&mapping.iroh_hash)
+            );
+            let kubo = kubo?;
+            let iroh = iroh?;
+            Self::verify_bytes(&kubo, &iroh, mapping.size, &mapping.sha256)?;
+            return Ok((BackendType::Kubo, kubo));
+        }
+        let order = self.cat_order(cid).await?;
         let mut first_err: Option<BackendError> = None;
         for (i, t) in order.iter().enumerate() {
-            match self.backend(*t).cat(cid).await {
+            match self.content_backend(*t).cat(cid).await {
                 Ok(bytes) => {
                     if i > 0 {
                         // fallback 命中 → 回填来源标记，实现自愈路由
@@ -326,10 +421,71 @@ impl BackendRouter {
         path: &std::path::Path,
         prefer: Option<BackendType>,
     ) -> Result<(BackendType, AddOutput), BackendError> {
+        if prefer.is_none() && matches!(self.policy().await, RoutePolicy::Mirror) {
+            return self.add_file_mirrored(path).await;
+        }
         let t = self.choose_for_add(prefer).await;
-        let out = self.backend(t).add_file(path).await?;
+        let out = self.content_backend(t).add_file(path).await?;
+        ContentRef::from_backend(&out.cid, t)?;
         self.record_origin(&out.cid, t).await;
         Ok((t, out))
+    }
+
+    async fn add_file_mirrored(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(BackendType, AddOutput), BackendError> {
+        let source = tokio::fs::read(path)
+            .await
+            .map_err(|e| BackendError::internal(format!("failed to read mirror source: {e}")))?;
+        let (kubo, iroh) = tokio::join!(self.kubo.add_file(path), self.iroh.add_file(path));
+        let kubo = kubo?;
+        let iroh = iroh?;
+        let kubo_ref = ContentRef::from_backend(&kubo.cid, BackendType::Kubo)?;
+        let iroh_ref = ContentRef::from_backend(&iroh.cid, BackendType::Iroh)?;
+        let kubo_value = kubo_ref.value();
+        let iroh_value = iroh_ref.value();
+        let (kubo_bytes, iroh_bytes) =
+            tokio::join!(self.kubo.cat(&kubo_value), self.iroh.cat(&iroh_value));
+        let kubo_bytes = kubo_bytes?;
+        let iroh_bytes = iroh_bytes?;
+        let digest = Self::sha256(&source);
+        Self::verify_bytes(&kubo_bytes, &iroh_bytes, source.len() as u64, &digest)?;
+        if kubo_bytes != source {
+            return Err(BackendError::internal(
+                "mirror verification failed: backend bytes differ from source",
+            ));
+        }
+        let mapping = ContentMapping {
+            kubo_cid: kubo.cid.clone(),
+            iroh_hash: iroh.cid.clone(),
+            size: source.len() as u64,
+            sha256: digest,
+        };
+        self.record_mapping(mapping).await;
+        self.record_origin(&kubo.cid, BackendType::Kubo).await;
+        self.record_origin(&iroh.cid, BackendType::Iroh).await;
+        Ok((BackendType::Kubo, kubo))
+    }
+
+    fn sha256(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(bytes))
+    }
+
+    fn verify_bytes(
+        kubo: &[u8],
+        iroh: &[u8],
+        expected_size: u64,
+        expected_sha256: &str,
+    ) -> Result<(), BackendError> {
+        if kubo != iroh
+            || kubo.len() as u64 != expected_size
+            || Self::sha256(kubo) != expected_sha256
+        {
+            return Err(BackendError::internal("mirror byte verification failed"));
+        }
+        Ok(())
     }
 }
 
@@ -346,48 +502,40 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_ipfs_cids_go_to_kubo() {
-        // CIDv0
+    fn content_ref_requires_semantic_cid_or_explicit_iroh_kind() {
+        let cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
         assert_eq!(
-            BackendRouter::classify_cid("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"),
-            BackendType::Kubo
-        );
-        // CIDv1 (dag-pb / raw)
-        assert_eq!(
-            BackendRouter::classify_cid(
-                "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
-            ),
+            ContentRef::parse(cid).unwrap().backend_type(),
             BackendType::Kubo
         );
         assert_eq!(
-            BackendRouter::classify_cid("bafkreib2random"),
-            BackendType::Kubo
-        );
-    }
-
-    #[test]
-    fn test_classify_non_ipfs_goes_to_iroh() {
-        // iroh 的 BLAKE3 内容哈希（非 IPFS 多编码前缀）
-        assert_eq!(
-            BackendRouter::classify_cid("2fd4e1c67a2d28fced849ee1bb76e7391b93eb12"),
+            ContentRef::parse("iroh:2fd4e1c67a2d28fced849ee1bb76e7391b93eb12")
+                .unwrap()
+                .backend_type(),
             BackendType::Iroh
         );
+        assert!(ContentRef::parse("bafkreib2random").is_err());
+        assert!(ContentRef::parse("2fd4e1c67a2d28fced849ee1bb76e7391b93eb12").is_err());
     }
 
     #[tokio::test]
-    async fn test_default_policy_is_kubo_only() {
+    async fn test_default_policy_is_auto_with_iroh_writes() {
         let r = router();
-        assert_eq!(r.policy().await, RoutePolicy::KuboOnly);
-        // KuboOnly 下即便是 iroh 形态的 cid 也走 Kubo（零回归）
-        assert_eq!(r.choose_for_cid("2fd4e1c67a").await, BackendType::Kubo);
+        assert_eq!(r.policy().await, RoutePolicy::Auto);
+        assert_eq!(r.choose_for_add(None).await, BackendType::Iroh);
     }
 
     #[tokio::test]
     async fn test_auto_policy_routes_by_content() {
         let r = router();
         r.set_policy(RoutePolicy::Auto).await;
-        assert_eq!(r.choose_for_cid("QmHash").await, BackendType::Kubo);
-        assert_eq!(r.choose_for_cid("2fd4e1c67a").await, BackendType::Iroh);
+        let cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+        assert_eq!(r.choose_for_cid(cid).await.unwrap(), BackendType::Kubo);
+        assert_eq!(
+            r.choose_for_cid("iroh:2fd4e1c67a").await.unwrap(),
+            BackendType::Iroh
+        );
+        assert!(r.choose_for_cid("2fd4e1c67a").await.is_err());
     }
 
     #[tokio::test]
@@ -399,18 +547,21 @@ mod tests {
         r.record_origin("QmLooksLikeIpfsButIroh", BackendType::Iroh)
             .await;
         assert_eq!(
-            r.choose_for_cid("QmLooksLikeIpfsButIroh").await,
+            r.choose_for_cid("QmLooksLikeIpfsButIroh").await.unwrap(),
             BackendType::Iroh,
             "explicit origin tag must override prefix heuristic"
         );
 
         // 反向：非 IPFS 形态但标记为 Kubo
         r.record_origin("deadbeef00", BackendType::Kubo).await;
-        assert_eq!(r.choose_for_cid("deadbeef00").await, BackendType::Kubo);
+        assert_eq!(
+            r.choose_for_cid("deadbeef00").await.unwrap(),
+            BackendType::Kubo
+        );
 
-        // 无标记则回退启发式
-        assert_eq!(r.choose_for_cid("QmUntagged").await, BackendType::Kubo);
-        assert_eq!(r.choose_for_cid("ffee00untagged").await, BackendType::Iroh);
+        // 无标记的歧义字符串必须被拒绝，不能回退到前缀猜测。
+        assert!(r.choose_for_cid("QmUntagged").await.is_err());
+        assert!(r.choose_for_cid("ffee00untagged").await.is_err());
     }
 
     #[tokio::test]
@@ -450,7 +601,7 @@ mod tests {
     async fn test_iroh_only_policy_overrides() {
         let r = router();
         r.set_policy(RoutePolicy::IrohOnly).await;
-        assert_eq!(r.choose_for_cid("QmHash").await, BackendType::Iroh);
+        assert_eq!(r.choose_for_cid("QmHash").await.unwrap(), BackendType::Iroh);
         assert_eq!(r.choose_for_add(None).await, BackendType::Iroh);
     }
 
@@ -487,16 +638,13 @@ mod tests {
             "no origin tag expected"
         );
         assert_eq!(
-            r.choose_for_cid(&out.cid).await,
+            r.choose_for_cid(&out.cid).await.unwrap(),
             BackendType::Iroh,
             "Auto should route by real local presence, not by tag"
         );
 
-        // iroh 本地没有的 IPFS CID → 探测 miss → 兜底启发式走 Kubo
-        assert_eq!(
-            r.choose_for_cid("QmSomethingNotLocalXYZ").await,
-            BackendType::Kubo
-        );
+        // 看起来像 CID 但语义无效的值不能再靠前缀路由。
+        assert!(r.choose_for_cid("QmSomethingNotLocalXYZ").await.is_err());
 
         let _ = tokio::fs::remove_file(&tmp).await;
     }
@@ -521,7 +669,7 @@ mod tests {
 
         // 故意打上**错误**的来源标记（Kubo），强制 primary=Kubo
         r.record_origin(&out.cid, BackendType::Kubo).await;
-        assert_eq!(r.choose_for_cid(&out.cid).await, BackendType::Kubo);
+        assert_eq!(r.choose_for_cid(&out.cid).await.unwrap(), BackendType::Kubo);
 
         // cat：primary=Kubo（死端口→失败）→ fallback 到 iroh → 命中
         let (used, bytes) = r.cat(&out.cid).await.expect("fallback should succeed");
@@ -580,6 +728,82 @@ mod tests {
         assert_eq!(RoutePolicy::parse("auto"), Some(RoutePolicy::Auto));
         assert_eq!(RoutePolicy::parse("Kubo"), Some(RoutePolicy::KuboOnly));
         assert_eq!(RoutePolicy::parse("IROH_ONLY"), Some(RoutePolicy::IrohOnly));
+        assert_eq!(RoutePolicy::parse("mirror"), Some(RoutePolicy::Mirror));
         assert_eq!(RoutePolicy::parse("nope"), None);
+    }
+
+    #[test]
+    fn usage_modes_map_to_internal_policies() {
+        assert_eq!(UsageMode::parse("local_first"), Some(UsageMode::LocalFirst));
+        assert_eq!(UsageMode::LocalFirst.route_policy(), RoutePolicy::IrohOnly);
+        assert_eq!(UsageMode::Compatible.route_policy(), RoutePolicy::Auto);
+        assert_eq!(UsageMode::Mirrored.route_policy(), RoutePolicy::Mirror);
+        assert_eq!(
+            UsageMode::from_legacy(RoutePolicy::KuboOnly),
+            UsageMode::Compatible
+        );
+    }
+
+    #[test]
+    fn mirror_byte_verification_rejects_divergence() {
+        let bytes = b"same bytes";
+        let digest = BackendRouter::sha256(bytes);
+        BackendRouter::verify_bytes(bytes, bytes, bytes.len() as u64, &digest).unwrap();
+        assert!(
+            BackendRouter::verify_bytes(bytes, b"different", bytes.len() as u64, &digest).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn content_mapping_persists_under_both_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let kubo = Arc::new(KuboBackend::new("http://127.0.0.1:5001".to_string()));
+        let iroh = Arc::new(IrohBackend::new(dir.path().join("iroh")));
+        let mapping = ContentMapping {
+            kubo_cid: "QmMapping".into(),
+            iroh_hash: "irohhash".into(),
+            size: 42,
+            sha256: "00".repeat(32),
+        };
+        {
+            let router = BackendRouter::new(kubo.clone(), iroh.clone(), Some(dir.path().into()));
+            router.record_mapping(mapping.clone()).await;
+        }
+        let restored = BackendRouter::new(kubo, iroh, Some(dir.path().into()));
+        assert_eq!(
+            restored.known_mapping("QmMapping").await,
+            Some(mapping.clone())
+        );
+        assert_eq!(restored.known_mapping("irohhash").await, Some(mapping));
+    }
+
+    #[cfg(feature = "iroh-backend")]
+    #[tokio::test]
+    async fn mirror_dual_write_and_read_verifies_real_backends_when_kubo_is_available() {
+        let kubo = Arc::new(KuboBackend::new("http://127.0.0.1:5001".to_string()));
+        if !crate::backend_trait::Backend::is_available(kubo.as_ref()).await {
+            eprintln!("SKIP: Mirror integration requires local Kubo on 127.0.0.1:5001");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let iroh = Arc::new(IrohBackend::new(dir.path().join("iroh")));
+        let router = BackendRouter::new_with_policy(
+            kubo,
+            iroh,
+            Some(dir.path().into()),
+            RoutePolicy::Mirror,
+        );
+        let payload: Vec<u8> = (0..8192u32).map(|n| (n % 251) as u8).collect();
+        let source = dir.path().join("mirror.bin");
+        tokio::fs::write(&source, &payload).await.unwrap();
+
+        let (_, output) = router.add_file(&source, None).await.expect("mirror add");
+        let mapping = router
+            .known_mapping(&output.cid)
+            .await
+            .expect("mapping must be committed after verification");
+        assert_ne!(mapping.kubo_cid, mapping.iroh_hash);
+        let (_, bytes) = router.cat(&output.cid).await.expect("verified mirror read");
+        assert_eq!(bytes, payload);
     }
 }

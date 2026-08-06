@@ -6,6 +6,7 @@ pub mod bandwidth;
 pub mod benchmark;
 pub mod cache;
 pub mod commands;
+pub mod commands_binary;
 pub mod commands_mfs;
 pub mod compat_test;
 pub mod config;
@@ -29,6 +30,9 @@ use state::AppState;
 use tauri::Manager;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+static LOG_GUARD: std::sync::OnceLock<tracing_appender::non_blocking::WorkerGuard> =
+    std::sync::OnceLock::new();
+
 /// 初始化日志系统
 fn init_logging() {
     // 获取日志目录
@@ -41,18 +45,27 @@ fn init_logging() {
     std::fs::create_dir_all(&log_dir).ok();
 
     // 创建文件日志
-    let file_appender = tracing_appender::rolling::daily(log_dir, "app.log");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "app.log");
+    let (file_writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+        .lossy(false)
+        .finish(file_appender);
+    // Keep the worker alive until process exit; dropping this guard stops file writes.
+    let _ = LOG_GUARD.set(guard);
 
     // 初始化订阅者
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .with(tracing_subscriber::fmt::layer().with_writer(file_appender))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file_writer),
+        )
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
         .init();
 
-    tracing::info!("Logging initialized");
+    tracing::info!(path = %log_dir.display(), "Logging initialized");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -140,6 +153,9 @@ pub fn run() {
             commands::get_route_policy,
             commands::set_route_policy,
             commands::get_backend_route,
+            commands::get_usage_mode,
+            commands::set_usage_mode,
+            commands::get_migration_status,
             // Phase D1: 节点身份
             commands::get_node_identity,
             commands::set_node_label,
@@ -147,8 +163,8 @@ pub fn run() {
             // Phase D3: 节点健康度
             commands::get_node_health,
             // 二进制哈希校验
-            commands::get_binary_verification_info,
-            commands::set_binary_hash,
+            commands_binary::get_binary_verification_info,
+            commands_binary::set_binary_hash,
             // MFS (Mutable File System)
             commands_mfs::mfs_ls,
             commands_mfs::mfs_stat,

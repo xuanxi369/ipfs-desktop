@@ -5,6 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+fn is_multicast_interface_warning(line: &str) -> bool {
+    line.contains("mdns: Failed to set multicast interface")
+}
+
 /// IPFS 守护进程控制器
 ///
 /// 负责启动、停止和监控 Kubo 守护进程。
@@ -32,12 +36,63 @@ impl DaemonController {
         }
     }
 
+    /// Ensure the configured Kubo repository exists before starting the daemon.
+    ///
+    /// `ipfs init` is idempotently invoked only when the repository's config
+    /// file is missing. This lets packaged builds work on first launch without
+    /// requiring users to install or invoke the Kubo CLI themselves.
+    pub async fn ensure_repo_initialized(&self) -> Result<bool, DaemonError> {
+        if self.repo_path.join("config").is_file() {
+            return Ok(false);
+        }
+
+        let binary_path = Arc::clone(&self.binary_path);
+        let repo_path = Arc::clone(&self.repo_path);
+        tracing::info!("Initializing Kubo repository at {:?}", repo_path);
+
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(repo_path.as_path()).map_err(|e| {
+                DaemonError::ProcessStartFailed(format!(
+                    "failed to create repository directory: {e}"
+                ))
+            })?;
+
+            let output = Command::new(binary_path.as_path())
+                .env("IPFS_PATH", repo_path.as_path())
+                .arg("init")
+                .output()
+                .map_err(|e| {
+                    DaemonError::ProcessStartFailed(format!("failed to run ipfs init: {e}"))
+                })?;
+
+            if output.status.success() {
+                tracing::info!("Kubo repository initialized successfully");
+                Ok(true)
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                Err(DaemonError::ProcessStartFailed(format!(
+                    "ipfs init exited with {}: {}",
+                    output.status,
+                    if stderr.is_empty() {
+                        "unknown error"
+                    } else {
+                        &stderr
+                    }
+                )))
+            }
+        })
+        .await
+        .map_err(|e| DaemonError::ProcessStartFailed(format!("ipfs init task failed: {e}")))?
+    }
+
     /// 启动守护进程
     pub async fn start(&self, flags: Vec<String>) -> Result<(), DaemonError> {
         // 防止重复启动
         if self.is_running().await {
             return Err(DaemonError::InvalidState);
         }
+
+        self.ensure_repo_initialized().await?;
 
         tracing::info!("Starting IPFS daemon...");
         tracing::info!("Binary: {:?}", self.binary_path);
@@ -99,10 +154,24 @@ impl DaemonController {
         use std::io::{BufRead, BufReader};
         tokio::task::spawn_blocking(move || {
             let reader = BufReader::new(pipe);
+            let mut mdns_warning_count = 0_u64;
             for line in reader.lines() {
                 match line {
                     Ok(text) if !text.is_empty() => {
-                        tracing::info!("[{label}] {text}");
+                        if is_multicast_interface_warning(&text) {
+                            mdns_warning_count += 1;
+                            if mdns_warning_count == 1 {
+                                tracing::warn!(
+                                    "[{label}] Kubo mDNS could not use one or more Windows network adapters; LAN discovery may be unavailable on those adapters"
+                                );
+                            }
+                        } else if text.contains("[ERROR]") || text.contains("ERROR") {
+                            tracing::error!("[{label}] {text}");
+                        } else if text.contains("[WARN]") || text.contains("WARN") {
+                            tracing::warn!("[{label}] {text}");
+                        } else {
+                            tracing::info!("[{label}] {text}");
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("[{label}] Pipe read error: {e}");
@@ -110,6 +179,12 @@ impl DaemonController {
                     }
                     _ => {}
                 }
+            }
+            if mdns_warning_count > 1 {
+                tracing::warn!(
+                    "[{label}] suppressed {} duplicate Kubo mDNS multicast-interface warnings",
+                    mdns_warning_count - 1
+                );
             }
             tracing::info!("[{label}] Pipe closed (process exited)");
         });
@@ -277,6 +352,16 @@ impl Drop for DaemonController {
 mod tests {
     use super::*;
 
+    #[test]
+    fn detects_only_the_known_kubo_mdns_adapter_warning() {
+        assert!(is_multicast_interface_warning(
+            "[WARN] mdns: Failed to set multicast interface: setsockopt: invalid argument"
+        ));
+        assert!(!is_multicast_interface_warning(
+            "[WARN] swarm: failed to connect to peer"
+        ));
+    }
+
     #[tokio::test]
     async fn test_controller_not_running_initially() {
         let controller = DaemonController::new(
@@ -295,6 +380,29 @@ mod tests {
         );
         let result = controller.start(vec![]).await;
         assert!(result.is_err(), "Should fail with nonexistent binary");
+    }
+
+    #[tokio::test]
+    async fn test_ensure_repo_initialized_is_idempotent() {
+        let binary = match crate::daemon::BinaryFinder::find() {
+            Some(path) => path,
+            None => {
+                println!("SKIP: Kubo binary is not available");
+                return;
+            }
+        };
+        let repo_dir = tempfile::tempdir().expect("temporary Kubo repo");
+        let controller = DaemonController::new(binary, repo_dir.path().to_path_buf());
+
+        assert!(controller
+            .ensure_repo_initialized()
+            .await
+            .expect("first initialization should succeed"));
+        assert!(repo_dir.path().join("config").is_file());
+        assert!(!controller
+            .ensure_repo_initialized()
+            .await
+            .expect("second initialization should be a no-op"));
     }
 
     #[tokio::test]

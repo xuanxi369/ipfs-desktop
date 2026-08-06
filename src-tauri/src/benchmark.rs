@@ -44,6 +44,16 @@ pub struct BenchOpResult {
     pub p99_ms: f64,
     /// 总吞吐量（ops/sec）
     pub throughput_ops: f64,
+    /// 未聚合的每次测量结果，便于复核统计值。
+    pub samples_ms: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchEnvironment {
+    pub app_version: String,
+    pub os: String,
+    pub arch: String,
+    pub iroh_feature_enabled: bool,
 }
 
 /// 完整基准套件结果
@@ -59,6 +69,11 @@ pub struct BenchSuiteResult {
     pub winner: Option<String>,
     /// Kubo 平均延迟 / Iroh 平均延迟
     pub speedup_ratio: Option<f64>,
+    pub environment: BenchEnvironment,
+    pub warmup_iterations: u32,
+    pub measured_iterations: u32,
+    pub test_file_size_bytes: usize,
+    pub warmup_strategy: String,
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -145,6 +160,7 @@ impl MicroBenchmark {
             median_ms: median,
             p99_ms: p99,
             throughput_ops: throughput,
+            samples_ms: latencies,
         }
     }
 
@@ -353,6 +369,17 @@ impl MicroBenchmark {
             total_duration_ms: started.elapsed().as_millis() as u64,
             winner,
             speedup_ratio: speedup,
+            environment: BenchEnvironment {
+                app_version: env!("CARGO_PKG_VERSION").to_string(),
+                os: std::env::consts::OS.to_string(),
+                arch: std::env::consts::ARCH.to_string(),
+                iroh_feature_enabled: cfg!(feature = "iroh-backend"),
+            },
+            warmup_iterations: self.warmup,
+            measured_iterations: self.iterations,
+            test_file_size_bytes: 16_384,
+            warmup_strategy: "Run each operation without recording before measured iterations"
+                .to_string(),
         }
     }
 }
@@ -531,6 +558,7 @@ mod tests {
             median_ms: 2.0,
             p99_ms: 4.5,
             throughput_ops: 400.0,
+            samples_ms: vec![1.0, 2.0, 4.5, 5.0],
         };
         let json = serde_json::to_string(&result).unwrap();
         let parsed: BenchOpResult = serde_json::from_str(&json).unwrap();

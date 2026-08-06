@@ -51,6 +51,12 @@ pub enum BackendErrorKind {
 }
 
 impl BackendError {
+    pub fn invalid_argument(msg: impl Into<String>) -> Self {
+        Self {
+            kind: BackendErrorKind::InvalidArgument,
+            message: msg.into(),
+        }
+    }
     pub fn unavailable(msg: impl Into<String>) -> Self {
         Self {
             kind: BackendErrorKind::Unavailable,
@@ -165,6 +171,80 @@ pub enum BackendType {
     Iroh,
 }
 
+/// A backend-qualified, semantically validated content identifier.
+///
+/// IPFS references are parsed as real CIDs. Iroh hashes must be explicitly
+/// qualified (or supplied by a trusted backend result), so routing never has
+/// to infer a backend from a string prefix.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ContentRef {
+    Ipfs(cid::Cid),
+    Iroh(String),
+}
+
+impl ContentRef {
+    pub fn parse(value: &str) -> Result<Self, BackendError> {
+        let value = value.trim();
+        if let Some(cid) = value.strip_prefix("ipfs:") {
+            return cid
+                .parse::<cid::Cid>()
+                .map(Self::Ipfs)
+                .map_err(|e| BackendError::invalid_argument(format!("invalid IPFS CID: {e}")));
+        }
+        if let Some(hash) = value.strip_prefix("iroh:") {
+            return Self::iroh(hash);
+        }
+        value.parse::<cid::Cid>().map(Self::Ipfs).map_err(|_| {
+            BackendError::invalid_argument(
+                "ambiguous content reference; use iroh:<hash> for iroh content",
+            )
+        })
+    }
+
+    pub fn from_backend(value: &str, backend: BackendType) -> Result<Self, BackendError> {
+        match backend {
+            BackendType::Kubo => value.parse::<cid::Cid>().map(Self::Ipfs).map_err(|e| {
+                BackendError::invalid_argument(format!("backend returned invalid CID: {e}"))
+            }),
+            BackendType::Iroh => Self::iroh(value),
+        }
+    }
+
+    fn iroh(value: &str) -> Result<Self, BackendError> {
+        let value = value.trim();
+        if value.is_empty()
+            || value.len() > 256
+            || !value.bytes().all(|b| b.is_ascii_alphanumeric())
+        {
+            return Err(BackendError::invalid_argument("invalid iroh content hash"));
+        }
+        Ok(Self::Iroh(value.to_owned()))
+    }
+
+    pub fn backend_type(&self) -> BackendType {
+        match self {
+            Self::Ipfs(_) => BackendType::Kubo,
+            Self::Iroh(_) => BackendType::Iroh,
+        }
+    }
+
+    pub fn value(&self) -> String {
+        match self {
+            Self::Ipfs(cid) => cid.to_string(),
+            Self::Iroh(hash) => hash.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for ContentRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ipfs(cid) => write!(f, "ipfs:{cid}"),
+            Self::Iroh(hash) => write!(f, "iroh:{hash}"),
+        }
+    }
+}
+
 impl std::fmt::Display for BackendType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -192,6 +272,67 @@ pub struct BackendCapabilities {
     pub bitswap: bool,
     /// CID 版本
     pub cid_version: u8,
+}
+
+/// Minimal identity and health capability shared by every backend.
+#[async_trait]
+pub trait BackendIdentity: Send + Sync {
+    fn backend_type(&self) -> BackendType;
+    fn capabilities(&self) -> BackendCapabilities;
+    async fn is_available(&self) -> bool;
+}
+
+#[async_trait]
+pub trait NodeBackend: Send + Sync {
+    async fn node_info(&self) -> Result<NodeInfo, BackendError>;
+    async fn version(&self) -> Result<String, BackendError>;
+}
+
+#[async_trait]
+pub trait RepositoryBackend: Send + Sync {
+    async fn repo_stat(&self) -> Result<RepoInfo, BackendError>;
+    async fn repo_gc(&self) -> Result<(), BackendError>;
+}
+
+/// Content-addressed read/write capability used by the router.
+#[async_trait]
+pub trait ContentBackend: Send + Sync {
+    async fn add_file(&self, path: &Path) -> Result<AddOutput, BackendError>;
+    async fn cat(&self, reference: &str) -> Result<Vec<u8>, BackendError>;
+    async fn file_size(&self, reference: &str) -> Result<u64, BackendError>;
+}
+
+/// Pin/retention capability. Backends without this capability can keep
+/// returning `Unsupported` through the compatibility `Backend` trait.
+#[async_trait]
+pub trait PinningBackend: Send + Sync {
+    async fn pin_ls(&self) -> Result<Vec<PinEntry>, BackendError>;
+    async fn pin_add(&self, reference: &str) -> Result<(), BackendError>;
+    async fn pin_rm(&self, reference: &str) -> Result<(), BackendError>;
+}
+
+/// Naming capability (IPNS on Kubo; optional for future native backends).
+#[async_trait]
+pub trait NamingBackend: Send + Sync {
+    async fn name_publish(
+        &self,
+        reference: &str,
+        key_name: &str,
+        lifetime: &str,
+    ) -> Result<IpnsOutput, BackendError>;
+    async fn name_resolve(&self, name: &str) -> Result<IpnsPath, BackendError>;
+}
+
+#[async_trait]
+pub trait NetworkBackend: Send + Sync {
+    async fn swarm_peers(&self) -> Result<Vec<PeerInfo>, BackendError>;
+    async fn bandwidth_stats(&self) -> Result<BandwidthInfo, BackendError>;
+    async fn bitswap_stats(&self) -> Result<BitswapInfo, BackendError>;
+}
+
+#[async_trait]
+pub trait LifecycleBackend: Send + Sync {
+    async fn shutdown(&self) -> Result<(), BackendError>;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -294,6 +435,102 @@ pub trait Backend: Send + Sync {
 
     /// 关闭后端
     async fn shutdown(&self) -> Result<(), BackendError>;
+}
+
+// Transitional adapters keep existing backend implementations source-compatible
+// while allowing new code to depend only on the capability it actually uses.
+#[async_trait]
+impl<T: Backend + ?Sized> BackendIdentity for T {
+    fn backend_type(&self) -> BackendType {
+        Backend::backend_type(self)
+    }
+    fn capabilities(&self) -> BackendCapabilities {
+        Backend::capabilities(self)
+    }
+    async fn is_available(&self) -> bool {
+        Backend::is_available(self).await
+    }
+}
+
+#[async_trait]
+impl<T: Backend + ?Sized> NodeBackend for T {
+    async fn node_info(&self) -> Result<NodeInfo, BackendError> {
+        Backend::node_info(self).await
+    }
+    async fn version(&self) -> Result<String, BackendError> {
+        Backend::version(self).await
+    }
+}
+
+#[async_trait]
+impl<T: Backend + ?Sized> RepositoryBackend for T {
+    async fn repo_stat(&self) -> Result<RepoInfo, BackendError> {
+        Backend::repo_stat(self).await
+    }
+    async fn repo_gc(&self) -> Result<(), BackendError> {
+        Backend::repo_gc(self).await
+    }
+}
+
+#[async_trait]
+impl<T: Backend + ?Sized> ContentBackend for T {
+    async fn add_file(&self, path: &Path) -> Result<AddOutput, BackendError> {
+        Backend::add_file(self, path).await
+    }
+    async fn cat(&self, reference: &str) -> Result<Vec<u8>, BackendError> {
+        Backend::cat(self, reference).await
+    }
+    async fn file_size(&self, reference: &str) -> Result<u64, BackendError> {
+        Backend::file_size(self, reference).await
+    }
+}
+
+#[async_trait]
+impl<T: Backend + ?Sized> PinningBackend for T {
+    async fn pin_ls(&self) -> Result<Vec<PinEntry>, BackendError> {
+        Backend::pin_ls(self).await
+    }
+    async fn pin_add(&self, reference: &str) -> Result<(), BackendError> {
+        Backend::pin_add(self, reference).await
+    }
+    async fn pin_rm(&self, reference: &str) -> Result<(), BackendError> {
+        Backend::pin_rm(self, reference).await
+    }
+}
+
+#[async_trait]
+impl<T: Backend + ?Sized> NamingBackend for T {
+    async fn name_publish(
+        &self,
+        reference: &str,
+        key_name: &str,
+        lifetime: &str,
+    ) -> Result<IpnsOutput, BackendError> {
+        Backend::name_publish(self, reference, key_name, lifetime).await
+    }
+    async fn name_resolve(&self, name: &str) -> Result<IpnsPath, BackendError> {
+        Backend::name_resolve(self, name).await
+    }
+}
+
+#[async_trait]
+impl<T: Backend + ?Sized> NetworkBackend for T {
+    async fn swarm_peers(&self) -> Result<Vec<PeerInfo>, BackendError> {
+        Backend::swarm_peers(self).await
+    }
+    async fn bandwidth_stats(&self) -> Result<BandwidthInfo, BackendError> {
+        Backend::bandwidth_stats(self).await
+    }
+    async fn bitswap_stats(&self) -> Result<BitswapInfo, BackendError> {
+        Backend::bitswap_stats(self).await
+    }
+}
+
+#[async_trait]
+impl<T: Backend + ?Sized> LifecycleBackend for T {
+    async fn shutdown(&self) -> Result<(), BackendError> {
+        Backend::shutdown(self).await
+    }
 }
 
 #[cfg(test)]
@@ -411,16 +648,16 @@ mod tests {
     #[tokio::test]
     async fn test_stub_backend() {
         let b = StubBackend { available: true };
-        assert!(b.is_available().await);
-        assert_eq!(b.backend_type(), BackendType::Kubo);
-        let info = b.node_info().await.unwrap();
+        assert!(BackendIdentity::is_available(&b).await);
+        assert_eq!(BackendIdentity::backend_type(&b), BackendType::Kubo);
+        let info = NodeBackend::node_info(&b).await.unwrap();
         assert_eq!(info.peer_id, "stub");
     }
 
     #[tokio::test]
     async fn test_stub_unavailable() {
         let b = StubBackend { available: false };
-        assert!(!b.is_available().await);
+        assert!(!BackendIdentity::is_available(&b).await);
     }
 
     #[test]
