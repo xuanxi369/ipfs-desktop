@@ -119,7 +119,7 @@
   "saved": "Saved to",
   "notSaved": "not saved to disk",
   "routePolicy": "Dual-stack Route Policy",
-  "routePolicyHint": "KuboOnly = current behavior (default). Auto = route by content origin/heuristic. IrohOnly = force iroh.",
+  "routePolicyHint": "Compatible/Auto is the default: local additions use iroh, while Kubo starts on demand as the IPFS, IPNS, and Gateway compatibility bridge.",
   "routeTo": "Routes to",
   "nodeIdentity": "Node Identity",
   "nodeLabel": "Node name...",

@@ -119,7 +119,7 @@
   "saved": "已保存到",
   "notSaved": "未保存到磁盘",
   "routePolicy": "双栈路由策略",
-  "routePolicyHint": "KuboOnly = 当前行为（默认）。Auto = 按内容来源/启发式路由。IrohOnly = 强制 iroh。",
+  "routePolicyHint": "兼容/Auto 是默认模式：本地新增内容进入 iroh，Kubo 仅按需作为 IPFS、IPNS 与 Gateway 兼容桥启动。",
   "routeTo": "路由到",
   "nodeIdentity": "节点身份",
   "nodeLabel": "节点名称...",

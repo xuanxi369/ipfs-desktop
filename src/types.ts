@@ -19,11 +19,13 @@ export interface AppConfig {
   ipfs_path: string | null;
   api_addr: string;
   gateway_addr: string;
+  allow_remote_api: boolean;
   daemon_flags: string[];
   auto_launch: boolean;
   auto_gc: boolean;
   auto_restart: boolean;
-  route_policy: "KuboOnly" | "IrohOnly" | "Auto";
+  route_policy: "KuboOnly" | "IrohOnly" | "Auto" | "Mirror";
+  usage_mode?: "LocalFirst" | "Compatible" | "Mirrored" | null;
   kubo_binary_sha256: string | null;
 }
 
@@ -61,8 +63,8 @@ export interface PinList {
 export interface DashboardStats {
   node_id: { id: string; agent_version: string } | null;
   version: string | null;
-  repo: { num_objects: number; repo_size: number } | null;
-  peers: { peers: { Peer: string; Addr: string }[] } | null;
+  repo: { num_objects?: number; repo_size?: number } | null;
+  peers: { peers: { peer: string; addr: string }[] } | null;
   bandwidth: { total_in: number; total_out: number; rate_in: number; rate_out: number } | null;
   bitswap: { blocks_received: number; blocks_sent: number; data_received: number; data_sent: number } | null;
   pin_count: number;
@@ -102,10 +104,10 @@ export interface NodeHealth {
 export type TabName = "dashboard" | "webui" | "files" | "pins" | "ipns" | "iroh" | "advanced";
 
 export interface DashboardTick {
-  peers: { peers: { Peer: string; Addr: string }[] } | null;
+  peers: { peers: { peer: string; addr: string }[] } | null;
   bandwidth: { total_in: number; total_out: number; rate_in: number; rate_out: number } | null;
   bitswap: { blocks_received: number; blocks_sent: number; data_received: number; data_sent: number } | null;
-  repo: { num_objects: number; repo_size: number } | null;
+  repo: { num_objects?: number; repo_size?: number } | null;
 }
 
 // ═══════════════════════════════════════════════

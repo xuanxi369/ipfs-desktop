@@ -2,7 +2,15 @@ const KEY = "ipfs-benchmark-history";
 export type BenchmarkSnapshot = { timestamp: string; winner?: string; speedup_ratio?: number; total_duration_ms?: number };
 
 export function loadBenchmarkHistory(): BenchmarkSnapshot[] {
-  try { return JSON.parse(localStorage.getItem(KEY) || "[]"); } catch { return []; }
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(KEY) || "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is BenchmarkSnapshot =>
+          typeof item === "object" && item !== null && typeof item.timestamp === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 export function recordBenchmark(result: Record<string, unknown>): BenchmarkSnapshot[] {

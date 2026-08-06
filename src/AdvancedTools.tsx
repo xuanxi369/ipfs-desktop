@@ -12,6 +12,7 @@ export default function AdvancedTools({ setError, config, onConfigSaved }: { isR
   const [mfsDest, setMfsDest] = useState("");
   const [apiAddress, setApiAddress] = useState(config?.api_addr ?? "http://127.0.0.1:5001");
   const [gatewayAddress, setGatewayAddress] = useState(config?.gateway_addr ?? "http://127.0.0.1:8080");
+  const [allowRemoteApi, setAllowRemoteApi] = useState(config?.allow_remote_api ?? false);
 
   async function call(name: string, args: Record<string, unknown> = {}) {
     try { const result = await invoke(name, args); setMfsResult(JSON.stringify(result, null, 2)); setError(""); }
@@ -23,8 +24,9 @@ export default function AdvancedTools({ setError, config, onConfigSaved }: { isR
     <div className="ipns-card">
       <h3>API and Gateway</h3>
       <div className="input-row"><input aria-label="API address" className="cid-input" value={apiAddress} onChange={e => setApiAddress(e.target.value)} /><input aria-label="Gateway address" className="cid-input" value={gatewayAddress} onChange={e => setGatewayAddress(e.target.value)} />
-        <button className="btn-small btn-pin" disabled={!config} onClick={async () => { if (!config) return; const next = { ...config, api_addr: apiAddress.trim(), gateway_addr: gatewayAddress.trim() }; try { await invoke("update_config", { newConfig: next }); onConfigSaved(next); setError(""); } catch (e) { setError(formatError(e)); } }}>Save endpoints</button></div>
-      <p className="section-description">Remote API endpoints must use HTTPS. Credentials, query strings and fragments are rejected.</p>
+        <label><input aria-label="Allow remote API" type="checkbox" checked={allowRemoteApi} onChange={e => setAllowRemoteApi(e.target.checked)} /> Allow remote API</label>
+        <button className="btn-small btn-pin" disabled={!config} onClick={async () => { if (!config) return; const next = { ...config, api_addr: apiAddress.trim(), gateway_addr: gatewayAddress.trim(), allow_remote_api: allowRemoteApi }; try { await invoke("update_config", { newConfig: next }); onConfigSaved(next); setError(""); } catch (e) { setError(formatError(e)); } }}>Save endpoints</button></div>
+      <p className="section-description">Remote access is disabled by default. When enabled, endpoints must use HTTPS and resolve only to public IPs. Set IPFS_API_AUTHORIZATION for reverse-proxy authentication; system HTTP proxies are bypassed.</p>
     </div>
     <div className="ipns-card">
       <h3>Mutable File System</h3>

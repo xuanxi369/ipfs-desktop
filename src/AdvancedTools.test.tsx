@@ -5,7 +5,7 @@ import AdvancedTools from "./AdvancedTools";
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 
-const config = { ipfs_path: null, api_addr: "http://127.0.0.1:5001", gateway_addr: "http://127.0.0.1:8080", daemon_flags: [], auto_launch: false, auto_gc: true, auto_restart: true, route_policy: "KuboOnly" as const, kubo_binary_sha256: null };
+const config = { ipfs_path: null, api_addr: "http://127.0.0.1:5001", gateway_addr: "http://127.0.0.1:8080", allow_remote_api: false, daemon_flags: [], auto_launch: false, auto_gc: true, auto_restart: true, route_policy: "KuboOnly" as const, kubo_binary_sha256: null };
 
 describe("AdvancedTools", () => {
   beforeEach(() => mocks.invoke.mockReset());

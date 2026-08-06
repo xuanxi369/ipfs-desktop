@@ -11,6 +11,7 @@ interface IrohNativeProps {
   irohFetchResult: string;
   irohBusy: boolean;
   routePolicy: string;
+  migrationStatus: Record<string, number | boolean | string> | null;
   setError: (err: string) => void;
   setIrohFetchInput: (v: string) => void;
   setRoutePolicy: (v: string) => void;
@@ -25,20 +26,20 @@ interface IrohNativeProps {
 }
 
 export default function IrohNative({
-  irohInfo, irohCid, irohTicket, irohFetchInput, irohFetchResult, irohBusy, routePolicy,
+  irohInfo, irohCid, irohTicket, irohFetchInput, irohFetchResult, irohBusy, routePolicy, migrationStatus,
   setError, setIrohFetchInput, setRoutePolicy,
   loadIrohInfo, irohAddFile, irohShare, irohFetch, irohKeep, irohShutdown, irohUnkeep, irohRegisterTicket,
 }: IrohNativeProps) {
   const { t } = useTranslation();
   const policyDetails: Record<string, string> = {
-    KuboOnly: "All operations use Kubo. Best compatibility with the public IPFS network.",
-    Auto: "Uses recorded content origin, local iroh discovery, then CID heuristics. Reads may fall back across backends and registered iroh providers.",
-    IrohOnly: "Forces iroh. Kubo CID, Pin and IPNS operations may be unavailable.",
+    LocalFirst: "New local content uses iroh. Kubo stays stopped until an IPFS compatibility operation needs it.",
+    Compatible: "Default Auto mode: new content uses iroh; Kubo starts only as an IPFS/IPNS/Gateway compatibility bridge.",
+    Mirrored: "Writes to iroh and Kubo, then verifies both copies byte-for-byte before succeeding.",
   };
 
   async function applyRoutePolicy(policy: string) {
     try {
-      const p = await invoke<string>("set_route_policy", { policy });
+      const p = await invoke<string>("set_usage_mode", { mode: policy });
       setRoutePolicy(p);
       setError("");
     } catch (e) {
@@ -48,10 +49,10 @@ export default function IrohNative({
 
   return (
     <div className="ipns-section">
-      <div className="section-header"><div><span className="section-kicker">EXPERIMENTAL</span><h2>Direct Transfer</h2><p className="section-description">Fast native transfers for trusted peers, powered by iroh.</p></div><span className="lab-badge">IROH LAB</span></div>
+      <div className="section-header"><div><span className="section-kicker">NATIVE NETWORK</span><h2>Direct Transfer</h2><p className="section-description">Fast content transfer between trusted peers, powered by iroh.</p></div><span className="lab-badge">IROH</span></div>
       <div className="ipns-card">
         <h3><Icon name="iroh"/> {t("irohNative")}</h3>
-        <p style={{ fontSize: "0.85em", opacity: 0.7 }}>{t("irohHint")}</p>
+        <p className="supporting-copy">{t("irohHint")}</p>
         {irohInfo ? (
           <div className="ipns-result">
             {t("peerId")}: <span className="hash-cell">{irohInfo.peer_id}</span>
@@ -91,7 +92,7 @@ export default function IrohNative({
           <div className="preview-box">
             <h3>{t("ticket")} ({t("copyTicket")})</h3>
             <pre
-              style={{ cursor: "pointer", whiteSpace: "pre-wrap", wordBreak: "break-all" }}
+              className="ticket-output"
               title={t("copyTicket")}
               onClick={() => { navigator.clipboard?.writeText(irohTicket); }}
             >{irohTicket}</pre>
@@ -125,16 +126,23 @@ export default function IrohNative({
 
       {/* ── 双栈路由策略 ── */}
       <div className="ipns-card">
-        <h3><Icon name="shuffle"/> {t("routePolicy")}</h3>
+        <h3><Icon name="shuffle"/> Usage mode</h3>
         <div className="input-row">
           <select className="select-input" value={routePolicy} onChange={(e) => applyRoutePolicy(e.target.value)}>
-            <option value="KuboOnly">KuboOnly</option>
-            <option value="Auto">Auto</option>
-            <option value="IrohOnly">IrohOnly</option>
+            <option value="LocalFirst">Local first</option>
+            <option value="Compatible">IPFS compatible</option>
+            <option value="Mirrored">Verified mirror</option>
           </select>
         </div>
         <p className="route-explanation"><strong>{routePolicy}:</strong> {policyDetails[routePolicy]}</p>
-        <p style={{ fontSize: "0.85em", opacity: 0.7 }}>{t("routePolicyHint")}</p>
+        <p className="supporting-copy">{t("routePolicyHint")}</p>
+        {migrationStatus && (
+          <div className="ipns-result">
+            <strong>Migration: {Number(migrationStatus.progress_percent).toFixed(1)}%</strong><br/>
+            iroh: {String(migrationStatus.iroh_native)} · mirrored: {String(migrationStatus.mirrored)} · Kubo-only: {String(migrationStatus.kubo_only)}<br/>
+            Compatibility: {migrationStatus.ipfs_compatible ? "IPFS ready" : "local only"} · Kubo {migrationStatus.kubo_running ? "running" : "on demand"} · IPNS {migrationStatus.ipns_available ? "available" : "requires Kubo"}
+          </div>
+        )}
       </div>
     </div>
   );

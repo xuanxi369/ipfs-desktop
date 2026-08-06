@@ -37,13 +37,17 @@ export default function Files({
       <div className="section-header content-toolbar"><div><h3>{t("contentLibrary")}</h3><p className="section-description">{contentRecords.length} {t("indexedItems")}</p></div><button className="btn-small" onClick={loadContentRecords}><Icon name="activity"/> {t("refresh")}</button></div>
       {contentRecords.length > 0 && <div className="content-table"><table><thead><tr><th>{t("name")}</th><th>CID</th><th>{t("size")}</th><th>{t("backend")}</th><th>{t("added")}</th><th> </th></tr></thead><tbody>{contentRecords.map((f)=><tr key={f.cid}><td>{f.name}</td><td><button className="hash-button" title={f.cid} onClick={()=>copy(f.cid)}>{shortHash(f.cid)} <Icon name="copy"/></button></td><td>{formatBytes(f.size)}</td><td><span className="pin-type-badge">{f.backend}</span></td><td>{new Date(f.added_at*1000).toLocaleDateString()}</td><td><button className="btn-small btn-danger" onClick={() => removeContentRecord(f.cid)}>Remove</button></td></tr>)}</tbody></table></div>}
       {/* ── 上传 ── */}
-      <h2>{t("uploadFiles")}</h2>
+      <div className="content-actions-grid">
+      <section className="action-panel">
+      <div className="action-panel-heading"><span className="section-kicker">ADD</span><h2>{t("uploadFiles")}</h2></div>
       <div className="drop-zone" onClick={selectAndUpload}>
+        <span className="drop-zone-icon"><Icon name="upload"/></span>
         <p>{t("dropHere")}</p>
         <button className="btn-secondary" disabled={uploading}>
           {uploading ? t("uploading") + "..." : t("selectFiles")}
         </button>
       </div>
+      </section>
 
       {/* 上传进度条 */}
       {uploadProgress && (
@@ -61,7 +65,8 @@ export default function Files({
       )}
 
       {/* ── A1 下载 ── */}
-      <h2>{t("downloadFiles")}</h2>
+      <section className="action-panel">
+      <div className="action-panel-heading"><span className="section-kicker">RETRIEVE</span><h2>{t("downloadFiles")}</h2></div>
       <div className="download-section">
         <div className="input-row">
           <input
@@ -79,10 +84,12 @@ export default function Files({
           </button>
         </div>
         {routeHint && (
-          <div style={{ fontSize: "0.82em", opacity: 0.75, marginTop: "4px" }}>
+          <div className="route-hint">
             <Icon name="shuffle"/> {t("routeTo")}: <strong>{routeHint}</strong>
           </div>
         )}
+      </div>
+      </section>
       </div>
 
       {/* 下载进度条 */}

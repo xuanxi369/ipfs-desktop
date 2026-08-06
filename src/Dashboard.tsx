@@ -20,7 +20,6 @@ interface DashboardProps {
   editingLabel: boolean;
   labelDraft: string;
   health: NodeHealth | null;
-  activeBackend: string;
   backendCaps: Record<string, unknown> | null;
   benchResult: Record<string, unknown> | null;
   benchRunning: boolean;
@@ -31,7 +30,6 @@ interface DashboardProps {
   bwConfig: { max_connections: number; max_streams: number; upload_limit: number; download_limit: number; enabled: boolean };
   bwStatus: { rate_in: number; rate_out: number; total_in: number; total_out: number } | null;
   setError: (err: string) => void;
-  setActiveBackend: (b: string) => void;
   setBackendCaps: (c: Record<string, unknown> | null) => void;
   setBenchResult: (r: Record<string, unknown> | null) => void;
   setBenchRunning: (r: boolean) => void;
@@ -57,9 +55,9 @@ interface DashboardProps {
 export default function Dashboard({
   status, config, isRunning, dashboard, dashLoading, cacheHit,
   identity, editingLabel, labelDraft, health,
-  activeBackend, backendCaps, benchResult, benchRunning, compatResult, compatRunning,
+  backendCaps, benchResult, benchRunning, compatResult, compatRunning,
   proxyStats, offlineCount, bwConfig, bwStatus,
-  setError, setActiveBackend, setBackendCaps, setBenchResult, setBenchRunning,
+  setError, setBackendCaps, setBenchResult, setBenchRunning,
   setCompatResult, setCompatRunning, setOfflineCount, setBwConfig,
   setEditingLabel, setLabelDraft,
   loadDashboard, loadIdentity, loadHealth, saveLabel, exportIdentity,
@@ -80,6 +78,10 @@ export default function Dashboard({
 
   return (
     <>
+      <div className="page-intro dashboard-intro">
+        <div><span className="section-kicker">NODE</span><h2>{t("nodeDashboard")}</h2><p>{t("daemonStatus")} · {t("network")} · {t("contentItems")}</p></div>
+        <span className={`availability-badge ${isRunning ? "ready" : ""}`}>{isRunning ? t("nodeOnline") : t("nodeOffline")}</span>
+      </div>
       {/* ── Phase D1: 节点身份卡 ── */}
       <div className="status-card">
         <h2><Icon name="identity"/> {t("nodeIdentity")}</h2>
@@ -205,11 +207,11 @@ export default function Dashboard({
                 <>
                   <div className="dash-stat">
                     <span className="dash-label">{t("repoSize")}</span>
-                    <span className="dash-value">{formatBytes(dashboard.repo.repo_size)}</span>
+                    <span className="dash-value">{dashboard.repo.repo_size != null ? formatBytes(dashboard.repo.repo_size) : "N/A"}</span>
                   </div>
                   <div className="dash-stat">
                     <span className="dash-label">{t("numObjects")}</span>
-                    <span className="dash-value">{dashboard.repo.num_objects.toLocaleString()}</span>
+                    <span className="dash-value">{dashboard.repo.num_objects != null ? dashboard.repo.num_objects.toLocaleString() : "N/A"}</span>
                   </div>
                 </>
               ) : <div className="dash-na">N/A</div>}
@@ -218,7 +220,7 @@ export default function Dashboard({
             {/* 网络连接 */}
             <div className="dash-card">
               <div className="dash-card-title">{t("network")}</div>
-              {dashboard.peers ? (
+              {Array.isArray(dashboard.peers?.peers) ? (
                 <div className="dash-stat">
                   <span className="dash-label">{t("connectedPeers")}</span>
                   <span className="dash-value dash-big">{dashboard.peers.peers.length}</span>
@@ -290,18 +292,10 @@ export default function Dashboard({
 
       <PeerMap isRunning={isRunning} setError={setError} />
 
-      {/* ── Phase 4: 后端选择器 ── */}
+      {/* Runtime capabilities; product-level selection lives in Usage Mode. */}
       <div className="backend-bar">
-        <span className="backend-label"><Icon name="link"/> {t("activeBackend")}:</span>
-        <select className="select-input" value={activeBackend} onChange={async (e) => {
-          const v = e.target.value;
-          try { await invoke("switch_backend", { backendType: v }); setActiveBackend(v); }
-          catch (e) { setError(formatError(e)); }
-        }}>
-          <option value="kubo">Kubo (Go)</option>
-          {/* Iroh 后端目前仅为 stub（未实现文件/Pin/IPNS 等操作），暂不开放切换 */}
-          <option value="iroh" disabled>Iroh (Rust) — 开发中 / not yet functional</option>
-        </select>
+        <span className="backend-label"><Icon name="link"/> Runtime compatibility:</span>
+        <span className="backend-caps-badge">iroh primary · Kubo on demand</span>
         <button onClick={async () => {
           try {
             const caps = await invoke<Record<string, unknown>>("get_backend_capabilities");
