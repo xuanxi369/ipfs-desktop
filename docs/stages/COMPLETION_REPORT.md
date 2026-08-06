@@ -24,7 +24,7 @@
 
 | # | 任务 | 状态 | 说明 |
 |---|------|------|------|
-| 8 | iroh 后端完整实装 | ⏸️ 待完成 | 需要启用 iroh-backend feature 并完善实现 |
+| 8 | iroh 后端完整实装 | ✅ 已完成 | 默认启用真实 iroh 后端，包含持久身份、内容收发、ticket、keep/unkeep 与双节点测试 |
 
 ---
 
@@ -333,13 +333,8 @@ warning: use of deprecated method `auto_launch::AutoLaunchBuilder::set_use_launc
 **影响**: 仅警告，不影响功能  
 **状态**: 待修复
 
-### 2. Kubo 哈希数据库
-当前 `kubo_hashes.rs` 中的哈希值为**示例数据**。
-
-**待办**：
-- [ ] 从 Kubo Releases 获取真实哈希
-- [ ] 更新各平台哈希值
-- [ ] 添加更多历史版本
+### 2. Kubo 哈希验证
+原有示例哈希数据库已移除，应用不再声称未验证的摘要属于官方发行版。Windows 内置 Kubo 下载流程校验官方发布的 SHA-512 sidecar；高级用户仍可通过 `kubo_binary_sha256` 固定本机可执行文件摘要。
 
 ### 3. iroh 后端测试超时
 iroh 相关测试超时，可能存在：

@@ -90,6 +90,7 @@ jobs:
   iroh-backend:
     needs: frontend-check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -114,6 +115,10 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml --features iroh-backend
       - name: Cargo test (iroh backend)
         run: cargo test --manifest-path src-tauri/Cargo.toml --features iroh-backend --lib
+      - name: Cargo test (stub compatibility)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib
+      - name: Two-node local integration test (real iroh backend)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features iroh-backend --test iroh_two_node -- --nocapture
 
   # ════════════════════════════════════════════════════════════
   # 3. Rust 代码质量检查 (仅 Linux, 快速)
@@ -202,6 +207,10 @@ jobs:
           cache: "npm"
 
       - run: npm ci
+
+      - name: Download and verify bundled Kubo (Windows)
+        if: runner.os == 'Windows'
+        run: npm run setup:kubo
 
       # Tauri 完整构建 (前端 + Rust + 打包)
       - name: Tauri build

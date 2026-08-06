@@ -2,7 +2,22 @@
 
 > **一句话定位**：本项目真正的价值不是"用 Rust 重写一个 Electron 应用",而是**在一条稳定的 `Backend` 抽象缝之上，把去中心化节点从 Go 逐步"锈化"（Rustify）为原生 Rust，最终成长为可长期驻留、可被信任的个人节点**。
 >
-> 本文基于对仓库**当前真实代码**（21 个 Rust 模块 / 40 个 Tauri 命令 / 已实现缓存·代理·离线队列·带宽·双后端抽象·基准测试）的逐文件分析，而非早期 MVP 快照。所有阶段判据均与代码中的现有结构对齐。
+> 路线图包含“当前实现”和“长期愿景”两类内容。当前实现快照以 **2026-08-05** 的代码为准；未来阶段是方向与退出判据，不构成当前版本承诺。
+
+## 当前实现快照（2026-08-05）
+
+| 项目 | 当前事实 |
+|------|----------|
+| Rust 代码结构 | `src-tauri/src/` 下 39 个 `.rs` 文件；Tauri 命令已按 daemon、config、content、IPNS、monitoring、iroh、identity 等领域拆分 |
+| IPC 命令 | 68 个 `#[tauri::command]`；注册入口仍集中在 `lib.rs`，实现分布在领域命令文件中 |
+| Backend 契约 | `Backend` trait 共 19 个方法（2 个同步能力方法、17 个异步操作） |
+| Kubo | 默认且稳定的后端；包含进程管理、RPC、MFS、Pin、IPNS、缓存、离线队列、带宽和健康监控 |
+| iroh | `iroh = 1`、`iroh-blobs = 0.103`；默认构建启用真实 `iroh-backend`，无默认 feature 时保留 stub 兼容层 |
+| 双栈路由 | 已实现使用模式、`Auto` 路由、来源/provider 持久化、Mirror 双写与字节校验；默认新增内容走 iroh，Kubo 按需作为兼容桥 |
+| 安全基线 | 严格 CID 解析、输出/MFS 路径保护、Kubo 二进制哈希验证、远程 API 显式授权与公网 DNS/IP 校验 |
+| Phase D 基础 | 节点标签/身份导出、健康度、托盘常驻、开机启动和崩溃自愈已实现；静态加密与长期运行验收尚未完成 |
+
+后文的 Phase A–E 是从这一快照继续演进的路线。标记为“已实现”的能力仍需通过发布检查和真实环境验证；实验性 feature 不等同于默认发行能力。
 
 ---
 
@@ -22,10 +37,10 @@
 
 ### 1.1 事实清单（来自真实代码，非愿景）
 
-- **架构分层清晰**：`React → Tauri IPC → commands.rs（唯一写入点）→ proxy/cache → daemon → Kubo HTTP`。
+- **架构分层清晰**：`React → Tauri IPC → commands/*（领域命令层）→ proxy/cache → daemon → Kubo HTTP`。
 - **进程管理是生产级**：`controller.rs` 有 SIGTERM→轮询→SIGKILL 停止链、`Drop` 兜底杀进程、`pipe_reader` 防管道阻塞、跨平台条件编译、5s 健康监控。
 - **已具备"体验层"能力**：SQLite TTL 缓存、熔断器 + 预取的智能代理、SQLite 离线操作队列 + FIFO 重放、带宽平滑监控。
-- **已埋好迁移接口**：`Backend` trait（16 个 async 方法）+ `KuboBackend`（完整）+ `IrohBackend`（stub）+ `compat_test.rs` / `benchmark.rs` 双后端测试框架。
+- **已埋好迁移接口**：`Backend` trait（19 个方法）+ `KuboBackend`（完整）+ `IrohBackend`（默认原生实现、无 feature 时为 stub）+ `compat_test.rs` / `benchmark.rs` 双后端测试框架。
 - **地基已加固**（近期修复）：密钥私钥不再明文落盘、交由 Kubo 权威管理、IPNS 名称使用真实标识、查询参数 URL 编码、上传改为流式真实进度、缓存命中统计一致化。
 
 ### 1.2 真正的战略资产：`Backend` 抽象缝
@@ -33,10 +48,10 @@
 多数人会把"文件上传""Pin 管理"当成项目资产。**错。** 那些 Kubo 都有。这个项目唯一 Kubo 给不了、且决定其未来的东西，是这条缝：
 
 ```
-        commands.rs / proxy.rs      ← 上层：GUI、缓存、代理、队列（与节点实现无关）
+        commands/* / proxy.rs       ← 上层：GUI、缓存、代理、队列（与节点实现无关）
                  │
     ┌────────────┴────────────┐
-    │   trait Backend (16 fn)  │     ← 抽象缝：稳定契约
+    │   trait Backend (19 fn)  │     ← 抽象缝：稳定契约
     └────────────┬────────────┘
        ┌─────────┼─────────┐
    KuboBackend  IrohBackend  (未来) NativeBackend
@@ -79,7 +94,7 @@
 | 工程量 | 巨大（以年计，等于重做 Kubo 的核心） | 中等（iroh 已把难点封装好，`iroh_adapter.rs` 已有对接模板） |
 | 原生性能 / 体积 | 高，但要自己调优 | 高，QUIC-only、无 Go 运行时 |
 | CID 语义 | 保持 CIDv0/v1 + multihash | 以 BLAKE3 哈希为主，CID 语义需转译 |
-| 成熟度风险 | rust-libp2p 稳定，但 IPFS 组件要自拼 | iroh 迭代快，API 会变（Cargo 已 pin `0.25`） |
+| 成熟度风险 | rust-libp2p 稳定，但 IPFS 组件要自拼 | iroh 迭代快，API 会变（当前为 `iroh = 1`、`iroh-blobs = 0.103`） |
 
 **这不是"选一个"，而是"如何让两者各司其职"的设计题。** 本路线的判断是：
 
@@ -95,13 +110,15 @@
 
 ### Phase A — 夯实锚点（Kubo 后端做到真正扎实）
 
+**当前状态：主体已实现，进入发布验证与边界补强阶段。**
+
 **目标**：让"Kubo 控制器"这条锚点无短板，作为长期兜底后端可信赖。
 
 **工作项**（均对应现有模块）：
-- 补全缺失的 Kubo 能力：MFS（`files/ls`、`files/stat`、`files/write`）、`pin/ls` 分类型、`repo/gc` 前端入口。
+- 已实现 MFS、Pin、IPNS、流式上传下载和仓库统计；后续重点是目录 add、大文件压力测试及 `repo/gc` 的普通用户入口。
 - 真实 IPNS 全链路：本地记录 ↔ Kubo `key/*` 已打通（近期完成），补 `name/publish` 的 `--ipns-base`、过期与 `--allow-offline` 处理。
 - 上传/下载全面流式化（下载 `cat_stream` 已流式；上传近期已改流式）；大文件与目录 add 的进度语义统一。
-- 安全基线：二进制来源校验（当前仅"行为验证"，应加已知发行版哈希/GPG 比对，`binary.rs` 已留注释）；恢复或明确移除自动更新（当前已禁用失效的 updater）。
+- 安全基线已包含官方发布下载校验、可选 SHA-256 固定、严格 CID 解析和远程 API 防护；自动更新仍需单独设计可信发布链。
 
 **退出判据**：`compat_test.rs` 对 Kubo 后端全绿；无"假实现"（无假进度、无装饰性字段）；`cargo clippy` 零告警、`cargo test --lib` 全绿。
 
@@ -109,10 +126,12 @@
 
 ### Phase B — 让"双后端可切换"从口号变成事实（iroh 实装）
 
+**当前状态：原生实现与 UI 已落地，但仅在 `iroh-backend` feature 中开放，仍属实验能力。**
+
 **目标**：`IrohBackend` 从 stub 变为**真实可用**，UI 的后端切换器真正放开。
 
 **工作项**：
-- 启用 `iroh-backend` feature，落地 `iroh_adapter.rs` 中已写好的模板：`node_info` / `version` / `add_file`（iroh-blobs）/ `cat`（BLAKE3 流式读取）/ `swarm_peers`（iroh 网络远端信息）。
+- 已实现 `node_info`、`version`、`add_file`、`cat`、BlobTicket、keep/unkeep、provider 注册和关闭后重建；下一步是跨机器兼容矩阵和长时间网络测试。
 - 在 `backend_trait.rs` 的 `BackendCapabilities` 里如实声明 iroh 与 Kubo 的能力差异（iroh 无原生 IPNS/Bitswap/传统 Pin，改用文档/作者系统）——**能力查询本身就是双栈路由的依据**。
 - 用 `benchmark.rs` 做**同机对照**：同一文件在 Kubo vs iroh 上的 add/cat 延迟与吞吐，产出第一份真实（而非 stub）对比数据。
 - 设计 CID/哈希转译层：iroh 的 BLAKE3 内容标识与 IPFS CID 的映射与展示策略。
@@ -123,10 +142,12 @@
 
 ### Phase C — Rust 原生节点成为"默认快车道"
 
+**当前状态：路由骨架已实现，默认策略仍为 `KuboOnly`，尚未达到“原生默认”的退出判据。**
+
 **目标**：在"本地 / 局域网 / 信任圈"场景下，默认走 Rust 原生节点，Kubo 退居"全球 IPFS 接入"角色。
 
 **工作项**：
-- 双栈路由策略：按内容来源与 `BackendCapabilities` 自动选择后端（本地/私有内容走 iroh，公网 CID 走 Kubo），路由逻辑落在 `proxy.rs` 与 `Backend` 缝之间。
+- `backend_router.rs` 已实现来源标记、CID 分类、provider 持久化、双后端 fallback 和 `Auto` 策略；在基准与兼容性数据充分前不改变默认策略。
 - NAT 穿透与发现：利用 iroh 的 relay/打洞能力，给出"无需公网 IP 也能被连上"的个人节点体验。
 - 内容持久化与 GC 语义统一：把两套后端的 pin/gc/作者系统抽象成上层一致的"我要长期保留这些内容"的心智模型。
 - （可选研究）评估是否需要 `rust-libp2p` 自研组件来补 iroh 与 IPFS 主网的互通短板——这是路 A/路 B 是否收敛的决策点。
@@ -137,13 +158,15 @@
 
 ### Phase D — 可信个人节点能力（把"节点"变成"可被信任的节点"）
 
+**当前状态：身份、健康度、托盘常驻和自愈已部分实现；加密存储与数周稳定性验收未完成。**
+
 **目标**：从"能存能取"升级为"可长期驻留、身份清晰、数据自主"的个人节点。这是通往"世界性"愿景的**唯一诚实入口**——先可信，再谈网络参与。
 
 **工作项**：
-- **去中心化身份**：以节点密钥为根，建立稳定、可读、可验证的身份（`Charles's Node ↔ PeerID/IPNS`），替代裸 CID 的无意义感。密钥保管延续"私钥不落地、交系统 keychain/节点密钥库"的既定安全基线。
+- **去中心化身份**：节点标签、Kubo PeerID、iroh node ID 和身份导出已实现；后续补签名验证、设备迁移与恢复流程。
 - **加密存储**：本地静态加密 + 选择性对外提供；"我共享什么、对谁共享"可控。
-- **可用性与自愈**：开机自启（已具备）+ 崩溃自恢复 + 后台低占用长驻；把"长期在线"做成一等公民。
-- **可观测性**：把现有仪表盘升级为"我的节点健康度"（在线时长、服务的内容、被连接次数、贡献量）。
+- **可用性与自愈**：开机自启、崩溃恢复、托盘常驻已具备；仍需数周 soak test 和资源上限验证。
+- **可观测性**：节点健康度、在线时间、仓库、Peer 和带宽指标已具备；后续补历史趋势和告警。
 
 **退出判据**：一台普通 PC/NAS 安装后可作为"可被寻址、可长期在线、数据加密自主"的个人节点稳定运行数周。
 
@@ -180,7 +203,7 @@
 
 ## 6. 风险与反命题（自我批判）
 
-- **iroh API 不稳定**：迭代快、会破坏性变更（已 pin `0.25`）。缓解：所有 iroh 细节封在 `iroh_adapter.rs` 缝后，上层无感。
+- **iroh API 不稳定**：迭代快、会破坏性变更（当前 `iroh = 1`、`iroh-blobs = 0.103`）。缓解：所有 iroh 细节封在 `iroh_adapter.rs` 缝后，上层无感，并在升级时运行 feature 测试矩阵。
 - **互操作性稀释"IPFS"语义**：走 iroh 越深，离 IPFS 主网越远。这是**必须向用户如实说明**的取舍，也是保留 Kubo 锚点的根本理由。
 - **"个人节点操作系统"是营销词**：本路线刻意**不**以它为目标，而以"可信个人节点"为可验证的中间站——先把节点做到可信，宏大叙事自然浮现，反之则空。
 - **单人/小团队带宽**：Phase C/D 工程量大。缓解：每阶段都有独立可发布产物，允许在任一阶段作为成品停留。

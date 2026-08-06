@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Downloaded Kubo sidecars (run npm run setup:kubo)
+src-tauri/resources/ipfs
+src-tauri/resources/ipfs.exe
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
