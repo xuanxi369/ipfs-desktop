@@ -216,6 +216,10 @@ docs/                        路线图、阶段记录、编码与发布检查
 - [MIT License](LICENSE-MIT)
 - [Apache License 2.0](LICENSE-APACHE)
 
-## 致谢
+## 致谢  -  向贡献者与‘去中心化’的先驱者致敬，向人类的自由意志致敬
+
+<a href="https://github.com/xuanxi369/IPFS-Desktop-Rust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust" />
+</a>
 
 感谢 IPFS、Kubo、iroh、Tauri、Rust 和开源社区的贡献者。本项目希望在保留 IPFS 生态互操作性的同时，探索一个更轻量、可验证、可长期演进的个人内容节点。
