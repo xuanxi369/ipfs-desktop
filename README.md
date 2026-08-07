@@ -15,7 +15,7 @@
 
 ## 功能现状
 
-后端已实现 **55 个 Tauri 命令**（含 iroh 原生收发 5 个、iroh 生命周期/keep 3 个、双栈路由 3 个、节点身份 3 个、节点健康 1 个），前端为单页多标签界面（控制面板 / WebUI / 文件 / Pin / IPNS / iroh 原生）。
+后端已实现 **55 个 Tauri 命令**（含 iroh 原生收发 5 个、iroh 生命周期/keep 3 个、双栈路由 3 个、节点身份 3 个、节点健康 1 个），前端为单页多标签界[...]
 
 | 能力 | 状态 | 说明 |
 |------|------|------|
@@ -24,16 +24,16 @@
 | 文件上传 / 下载 / 预览 | ✅ | 上传与下载均**流式**（分块，不整文件驻留内存）+ 真实进度条 |
 | Pin 管理（列表/添加/移除） | ✅ | 写操作后缓存自动失效 |
 | IPNS 发布 / 解析 + 密钥管理 | ✅ | **密钥由 Kubo 密钥库权威管理**；本应用只保存「标签→真实 IPNS 名」的公开记录，不接触私钥 |
-| 智能代理（缓存 + 熔断 + 预取 + 指标） | ✅ | 读命令与 Pin 写命令统一走 `ProxyClient`（缓存命中率/延迟/熔断统计一致化）；`get_dashboard_stats` 的「强制刷新」路径按设计直连 API |
-| 离线操作队列 + 自动重放 | ✅ | 守护进程恢复后每 15s FIFO 重放，最多重试 3 次 |
+| 智能代理（缓存 + 熔断 + 预取 + 指标） | ✅ | 读命令与 Pin 写命令统一走 `ProxyClient`（缓存命中率/延迟/熔断统计一致化）；`get_dashboard_stats` 的「强�[...]
+| 离线操作队列 + 自动重放 | ✅ | 守护进程恢复后每 15s FIFO 重放，最多���试 3 次 |
 | 带宽 / 连接数配置 | ✅ | 30 点滑动窗口速率平滑 |
 | 开机自启 / 系统托盘 | ✅ | |
-| 长驻与自愈（Phase D2） | ✅ | **关窗→隐藏到托盘**节点后台常驻（退出走托盘 Quit）；Kubo 守护进程**崩溃自动重启**（线性退避 + 上限 5 次 + 持续健康 30s 清零预算），`config.auto_restart` 控制（默认开） |
+| 长驻与自愈（Phase D2） | ✅ | **关窗→隐藏到托盘**节点后台常驻（退出走托盘 Quit）；Kubo 守护进程**崩溃自动重启**（线性退避 + 上限 5 次 + 持续健[...]
 | 节点身份（Phase D1） | ✅ | 人类可读标签 ↔ 节点密码学身份（Kubo PeerID / iroh 自证公钥），可编辑、可导出验证；见仪表盘「身份卡」 |
-| 节点健康度（Phase D3） | ✅ | 仪表盘「健康度」卡：应用/节点**在线时长** + 仓库对象数/大小 + 连接数 + 累计收发字节（贡献量）+ iroh 内容数（`get_node_health`） |
+| 节点健康度（Phase D3） | ✅ | 仪表盘「健康度」卡：应用/节点**在线时长** + 仓库对象数/大小 + 连接数 + 累计收发字节（贡献量）+ iroh 内容数（`get_[...]
 | 查询参数安全 | ✅ | 所有用户输入参数经 URL 百分号编码 |
 | Kubo vs iroh 基准 & 兼容性测试 | ✅ | `benchmark.rs` 已产出**真实** iroh add/cat 延迟数据（本机原生，亚毫秒级）；Kubo 侧需守护进程运行才有对比值 |
-| **iroh 原生后端** | 🟡 | 真实实装（`--features iroh-backend`，iroh 1.0 + iroh-blobs）：`node_info` / `add_file` / `cat`、**持久化节点身份**（跨重启稳定）、**serving + 两节点 QUIC 互传**、**生命周期**（`shutdown` → 从磁盘自动重启，内容留存）、**keep-alive**（命名 tag 保护内容免 GC）。IPNS/Pin 在 iroh 语义下不适用（返回 `Unsupported`）；`swarm_peers` 因 iroh 无节点枚举 API，改为**会话内双向追踪对端**（fetch 登记 outbound；`ClientConnectedNotify` 事件登记 inbound；双向为 both）；UI 暂不开放切换 |
+| **iroh 原生后端** | 🟡 | 真实实装（`--features iroh-backend`，iroh 1.0 + iroh-blobs）：`node_info` / `add_file` / `cat`、**持久化节点身份**（跨重启稳定）、**serving[...]
 
 > **安全说明**：私钥全程由 Kubo 保管，本应用代码不生成、不存储、不经 IPC 传输任何私钥。
 > 早期"本地明文私钥落盘"的实现已移除。二进制查找目前仅做「行为验证」（能否输出 Kubo 版本字符串），
@@ -129,7 +129,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features iroh-backend --lib re
 cargo test --manifest-path src-tauri/Cargo.toml --features iroh-backend --lib test_real_add_cat_comparison -- --nocapture
 ```
 
-> **Windows 依赖提示**：iroh 1.0 的网络层经 `netwatch` 引入 `wmi`；`wmi 0.18.4` 与 `windows-core 0.62` 存在冲突，本仓库 `Cargo.lock` 已将 `wmi` 固定到 `0.18.2`。若 `cargo update` 后 iroh 构建报 `windows-core` 相关错误，执行 `cargo update -p wmi --precise 0.18.2` 复位。
+> **Windows 依赖提示**：iroh 1.0 的网络层经 `netwatch` 引入 `wmi`；`wmi 0.18.4` 与 `windows-core 0.62` 存在冲突，本仓库 `Cargo.lock` 已将 `wmi` 固定到 `0.18.2`。若 `c[...]
 
 **iroh 原生收发命令（Phase B-a，GUI 可直接 `invoke`）**：
 
@@ -158,18 +158,17 @@ cargo test --manifest-path src-tauri/Cargo.toml --features iroh-backend --lib te
   3. **前缀启发式**——兜底（`Qm.../baf...` → Kubo，其余 → iroh）。
 
   这把最脆弱的前缀猜测降为最后手段。iroh 侧 hash 解析已做形态预校验（64 位 hex / 52 位 base32），避免把 Kubo CID 喂给 iroh 解析器时触发 panic。
-- **`cat_file` / `add_file` 已接入路由**：默认 `KuboOnly` 下行为与原来完全一致（Kubo 路径仍用实时 `api_client`，尊重运行时改地址）；切到 `Auto`/`IrohOnly` 才真正分流到 iroh。
+- **`cat_file` / `add_file` 已接入路由**：默认 `KuboOnly` 下行为与原来完全一致（Kubo 路径仍用实时 `api_client`，尊重运行时改地址）；切到 `Auto`/`IrohOnly` ��[...]
 - **双栈韧性（fallback-on-miss）**：`Auto` 下 `cat` 的后端取不到时按 `[主选, 另一个, 网络]` 三级 fallback：
   1. 本地主后端 →
   2. 本地另一后端 →
   3. **网络**：若已知该 CID 的 iroh provider（来自收过/登记过的 ticket），从远端节点跨网取回。
 
   任一级命中后**回填来源标记**（自愈，下次直达）；全部失败才返回主后端错误。`KuboOnly`/`IrohOnly` 是显式选择，不做跨栈 fallback。
-- **写侧策略**：`add_file` 支持可选 `prefer`（`"iroh"`/`"kubo"`）——「本地/信任圈内容优先 iroh」由此显式表达；省略即按策略（`Auto` 默认落 Kubo 以保证公网可寻址），零回归。
+- **写侧策略**：`add_file` 支持可选 `prefer`（`"iroh"`/`"kubo"`）——「本地/信任圈内容优先 iroh」由此显式表达；省略即按策略（`Auto` 默认落 Kubo 以保证�[...]
 - **前端可视化**：文件面板输入 CID 时实时显示「🔀 路由到 → Kubo/iroh」（`get_backend_route`，`Auto` 下含本地内容探测）。
-- **前端已有 "iroh 原生" 标签页**：可视化「选文件 → 原生添加 → 生成分享 ticket」与「粘贴 ticket → 收取并保存」，并可切换路由策略——GUI 真正能收发。
 
-**Phase D 里程碑自检（可信个人节点）**：`scripts/d5-selfcheck.sh` 跑可自动化的 D5 判据（构建/lint、身份稳定、自愈默认、路由韧性；`--iroh` 加核验内容完整性/生命周期/两节点互传/keep-alive）。手动/长期观察项（长跑数周、NAT 可达性、常驻内存、OS 加密）见 [PHASE_D5_CHECKLIST.md](PHASE_D5_CHECKLIST.md)。
+**Phase D 里程碑自检（可信个人节点）**：`scripts/d5-selfcheck.sh` 跑可自动化的 D5 判据（构建/lint、身份稳定、自愈默认、路由韧性；`--iroh` 加核验内容�[...]
 
 ```bash
 bash scripts/d5-selfcheck.sh --iroh   # 自动化部分全 PASS 即达标
@@ -221,19 +220,8 @@ ipfs-desktop-rust/
 │   │   ├── iroh_adapter.rs     # iroh → Backend 适配器（stub / 真实实现，由 iroh-backend feature 门控）
 │   │   ├── backend_router.rs   # 双栈路由骨架（Phase C）：按策略/内容在 Kubo↔iroh 间选后端 + 三级 fallback
 │   │   ├── identity.rs         # 节点身份记录（Phase D1）：人类可读标签 ↔ 节点密码学身份
-│   │   ├── compat_test.rs      # 协议兼容性测试框架
-│   │   ├── benchmark.rs        # 性能基准测试框架
-│   │   └── daemon/             # 二进制查找 / 进程控制 / HTTP API 客户端（19 端点）
-│   ├── capabilities/          # Tauri 权限能力声明
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-├── src/                        # React 前端
-│   ├── App.tsx                 # 主界面（5 Tab + 进度条 + 后端选择器）
-│   ├── i18n.ts, locales/       # 中英文国际化
-│   └── ...
-├── .github/workflows/build.yml # CI：三平台 typecheck + cargo check + test + clippy
-├── 项目路线.md                 # 长期技术路线（研究性）
-└── package.json
+│   │   │
+│   │   ...
 ```
 
 ---
@@ -261,7 +249,7 @@ ipfs-desktop-rust/
 ## Contributors - - 向贡献者与‘去中心化’的先驱者致敬，向人类的自由意志致敬
 
 <a href="https://github.com/xuanxi369/IPFS-Desktop-Rust/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust" />
+  <img src="https://contrib.rocks/image?repo=xuanxi369/IPFS-Desktop-Rust&cb=20260807" />
 </a>
 
 ---
